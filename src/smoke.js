@@ -328,6 +328,8 @@ export async function runSmoke() {
     if ((getState().info.exercises || []).length < 6) throw new Error(JSON.stringify(getState().info.exercises));
     await A.openExercise('02-Rechner');
     await until(() => getState().project && getState().project.exercise === '02-Rechner' && getState().files['Rechner.java']);
+    if (getState().activeTab !== '#readme' || !getState().tabs.includes('Rechner.java')) throw new Error('task first: ' + JSON.stringify(getState().tabs));
+    await shot('17a-exercise-open');
     await A.runTests({ all: true });
     const red = getState().tests.summary;
     if (!red || red.failed === 0) throw new Error('starter passes: ' + JSON.stringify(red));
@@ -355,9 +357,10 @@ export async function runSmoke() {
     const green = getState().tests.summary;
     if (green.passed !== green.total) throw new Error(JSON.stringify(green));
     await until(() => (getState().settings.exercisesDone || []).includes('02-Rechner'), 4000, 'not marked solved');
+    setState({ learnFocus: 'exercises' });
     A.go('learn');
     await until(() => document.querySelector('.ex-row .pill-pos'));
-    document.querySelector('.ex-row').scrollIntoView({ block: 'center' });
+    await until(() => document.getElementById('exercises').getBoundingClientRect().top < 200, 3000, 'not scrolled to the exercises');
     await shot('17b-exercises');
   });
   await step('settings page', async () => {

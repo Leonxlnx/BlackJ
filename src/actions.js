@@ -59,7 +59,10 @@ function loadProject(p) {
   for (const f of p.files) files[f.name] = { name: f.name, className: f.className, pkg: f.pkg || '', content: f.content, saved: f.content };
   const model = projectModel(files);
   const positions = layoutAll(model, p.positions || {});
-  const firstTab = p.files.find((f) => f.content.includes('static void main')) || p.files[0];
+  const firstTab = p.files.find((f) => f.content.includes('static void main')) || p.files.find((f) => !/Test\.java$/.test(f.name)) || p.files[0];
+  // An exercise opens with its task (README) in front, the class to work on next to it.
+  const tabs = firstTab ? [firstTab.name] : [];
+  if (p.exercise && p.readme) tabs.unshift('#readme');
   setState({
     project: { dir: p.dir, name: p.name, readOnly: p.readOnly, fromBlueJ: p.fromBlueJ, libs: p.libs || [], exercise: p.exercise || null },
     files,
@@ -72,8 +75,8 @@ function loadProject(p) {
     classInfo: {},
     console: [],
     exception: null,
-    tabs: firstTab ? [firstTab.name] : [],
-    activeTab: firstTab ? firstTab.name : null,
+    tabs,
+    activeTab: tabs[0] || null,
     reveal: null,
     view: 'project',
     dock: 'objects',

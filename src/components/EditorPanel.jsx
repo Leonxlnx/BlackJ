@@ -473,7 +473,8 @@ export default function EditorPanel() {
       m.pushEditOperations([], [{ range: m.getFullModelRange(), text: file.content }], () => null);
       applying.current = false;
     }
-    ed.updateOptions({ readOnly: !!project.readOnly });
+    // Prose (the README with an exercise's task) wraps; code keeps its lines.
+    ed.updateOptions({ readOnly: !!project.readOnly, wordWrap: active === '#readme' ? 'on' : 'off' });
   }, [active, files, readme, project]);
 
   useEffect(() => {

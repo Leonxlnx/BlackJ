@@ -32,6 +32,13 @@ export default function Learn() {
   const aiOff = useStore((s) => !!s.settings.aiOff);
   const exercises = useStore((s) => s.info.exercises || []);
   const done = useStore((s) => s.settings.exercisesDone || []);
+  const focus = useStore((s) => s.learnFocus);
+  useEffect(() => {
+    if (focus !== 'exercises') return;
+    setState({ learnFocus: null });
+    const el = document.getElementById('exercises');
+    if (el) el.scrollIntoView({ block: 'start' });
+  }, [focus]);
   // The palette (Ctrl+P) opens a concept by setting learnConcept.
   const id = useStore((s) => (CONCEPTS.some((c) => c.id === s.learnConcept) ? s.learnConcept : CONCEPTS[0].id));
   const setId = (next) => {
@@ -130,7 +137,7 @@ export default function Learn() {
               </div>
             </article>
             {exercises.length > 0 && (
-              <section className="err-list">
+              <section className="err-list" id="exercises">
                 <h2 className="section-title">{t('exercise.title')}</h2>
                 <div className="card">
                   {exercises.map((ex) => {

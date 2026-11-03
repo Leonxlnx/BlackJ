@@ -178,7 +178,7 @@ export default function Home() {
                 <li>{t('home.quick4')}</li>
               </ol>
               <div className="action-row" style={{ gap: 16 }}>
-                <button className="link small" onClick={() => A.go('learn')}>{t('home.exercises', { n: (info.exercises || []).length })}</button>
+                <button className="link small" onClick={() => { setState({ learnFocus: 'exercises' }); A.go('learn'); }}>{t('home.exercises', { n: (info.exercises || []).length })}</button>
                 <button className="link small" onClick={() => setState({ shortcuts: true })}>{t('home.shortcuts')}</button>
               </div>
             </div>
