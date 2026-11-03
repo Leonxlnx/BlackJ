@@ -53,6 +53,10 @@
         "to": "icon.png"
       },
       {
+        "from": "resources/icon.ico",
+        "to": "icon.ico"
+      },
+      {
         "from": "resources/junit",
         "to": "junit"
       }
@@ -61,7 +65,7 @@
       "target": [
         "portable"
       ],
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.ico"
     },
     "portable": {
       "artifactName": "BlackJ-${version}-portable.exe"

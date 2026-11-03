@@ -661,7 +661,8 @@ function createWindow() {
     show: false,
     backgroundColor: settings.get().theme === 'light' ? '#f9fafb' : '#171719',
     title: 'BlackJ',
-    icon: path.join(resDir, 'icon.png'),
+    // Windows draws the taskbar button from the .ico, which has every size on its own grid.
+    icon: path.join(resDir, process.platform === 'win32' && fs.existsSync(path.join(resDir, 'icon.ico')) ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
     titleBarOverlay: settings.get().theme === 'light'
@@ -712,6 +713,10 @@ app.on('second-instance', (_e, argv) => {
     if (dirs[0]) send('app:openPath', dirs[0]);
   }
 });
+
+// BlackJ's own taskbar identity: Windows groups its windows and draws their button from the
+// window icon, not from whatever icon it cached for the shortcut BlackJ was started from.
+if (process.platform === 'win32') app.setAppUserModelId('app.blackj.ide');
 
 app.whenReady().then(() => {
   settings = new Settings(app.getPath('userData'));
