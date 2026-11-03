@@ -316,6 +316,69 @@ function registerIpc() {
     return wrap(() => openProject(importArchive(r.filePaths[0])));
   });
 
+  // BlueJ's Tools → Project Documentation: javadoc into the project's doc folder, opened in the browser.
+  ipcMain.handle('project:javadoc', async () => {
+    if (!state.dir) return fail({ code: 'noProject' });
+    if (!state.jdk) return fail({ code: 'noJdk' });
+    const exe = path.join(state.jdk.home, 'bin', process.platform === 'win32' ? 'javadoc.exe' : 'javadoc');
+    if (!fs.existsSync(exe)) return fail({ code: 'noCompiler' });
+    const files = project.listJavaFiles(state.dir).map((rel) => path.join(state.dir, ...rel.split('/')));
+    if (!files.length) return fail({ code: 'noClasses' });
+    const out = path.join(state.dir, 'doc');
+    const name = path.basename(state.dir);
+    const cp = projectClasspath();
+    const args = ['-d', out, '-encoding', 'UTF-8', '-docencoding', 'UTF-8', '-charset', 'UTF-8', '-author', '-version', '-package', '-quiet', '-Xdoclint:none',
+      '-windowtitle', name, '-doctitle', name, '-sourcepath', state.dir, ...(cp.length ? ['-cp', cp.join(path.delimiter)] : []), ...files];
+    return new Promise((resolve) => {
+      let log = '';
+      const p = require('child_process').spawn(exe, args, { cwd: state.dir, windowsHide: true });
+      p.stdout.on('data', (d) => { log += d; });
+      p.stderr.on('data', (d) => { log += d; });
+      p.on('error', (err) => resolve(fail(err)));
+      p.on('close', (code) => {
+        const index = path.join(out, 'index.html');
+        if (code !== 0 || !fs.existsSync(index)) return resolve(fail({ code: 'javadocFailed', message: log.split(/\r?\n/).filter((l) => /error|Fehler/i.test(l)).slice(0, 3).join(' · ') || log.slice(0, 300) }));
+        if (!smokeDir) shell.openPath(index);
+        resolve({ ok: true, result: { index } });
+      });
+    });
+  });
+
+  // BlueJ's Project → Save As: a copy of the project (without compiled classes), opened right away.
+  ipcMain.handle('project:saveAs', async (_e, opts) => {
+    if (!state.dir) return fail({ code: 'noProject' });
+    let target = smokeDir && opts && opts.name ? path.join(projectsHome(), path.basename(opts.name)) : null;
+    if (!target) {
+      const r = await dialog.showSaveDialog(win, {
+        title: 'Projekt speichern unter',
+        defaultPath: path.join(path.dirname(state.dir), path.basename(state.dir) + ' Kopie'),
+        buttonLabel: 'Speichern',
+        properties: ['createDirectory'],
+      });
+      if (r.canceled || !r.filePath) return fail({ code: 'canceled' });
+      target = r.filePath;
+    }
+    const from = path.resolve(state.dir);
+    if (path.resolve(target) === from || path.resolve(target).startsWith(from + path.sep)) return fail({ code: 'invalidName' });
+    if (fs.existsSync(target) && fs.readdirSync(target).length) return fail({ code: 'exists' });
+    return wrap(() => {
+      fs.cpSync(from, target, { recursive: true, filter: (src) => !/[\\/](\.git|node_modules)([\\/]|$)/.test(src.slice(from.length)) && !/\.(class|ctxt)$/i.test(src) });
+      return openProject(target);
+    });
+  });
+
+  // BlueJ's Edit → Add Class from File: copies .java files into the open package.
+  ipcMain.handle('project:addFiles', async (_e, opts) => {
+    if (!state.dir) return fail({ code: 'noProject' });
+    let list = smokeDir && opts && Array.isArray(opts.files) ? opts.files : null;
+    if (!list) {
+      const r = await dialog.showOpenDialog(win, { title: 'Klasse aus Datei hinzufügen', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Java-Quelltext', extensions: ['java'] }] });
+      if (r.canceled || !r.filePaths.length) return fail({ code: 'canceled' });
+      list = r.filePaths;
+    }
+    return wrap(() => list.map((f) => project.addFile(state.dir, f, (opts && opts.pkg) || '')));
+  });
+
   ipcMain.handle('diagram:savePng', async (_e, { rect, name }) => {
     const area = { x: Math.max(0, Math.round(rect.x)), y: Math.max(0, Math.round(rect.y)), width: Math.round(rect.width), height: Math.round(rect.height) };
     if (area.width < 20 || area.height < 20) return fail({ code: 'invalidName' });

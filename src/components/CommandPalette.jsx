@@ -58,6 +58,9 @@ export default function CommandPalette() {
       if (model.list.some((c) => c.isTest)) cmd(t('tests.runAll'), () => A.runTests({ all: true }), '', 'check');
       cmd(t('pad.open'), () => setState({ dock: 'pad' }), '', 'terminal');
       cmd(t('lib.title'), () => A.openDialogBox({ type: 'library' }), '', 'book');
+      if (!project.readOnly) cmd(t('addFiles.title'), () => A.addClassesFromFiles(), '', 'file');
+      cmd(t('javadoc.title'), A.generateJavadoc, '', 'book');
+      cmd(t('saveAs.title'), () => A.saveProjectAs(), '', 'save');
       cmd(t('jar.title'), () => A.openDialogBox({ type: 'jar' }), '', 'save');
       cmd(t('zip.export'), () => A.exportZip(), '', 'save');
       cmd(t('ws.reset'), A.stopProgram, '', 'reset');

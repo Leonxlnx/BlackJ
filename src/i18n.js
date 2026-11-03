@@ -367,6 +367,7 @@ const de = {
   'diagram.showUses': 'Benutzt-Pfeile zeigen',
   'diagram.arrange': 'Neu anordnen',
   'diagram.saveImage': 'Als Bild speichern (PNG)',
+  'diagram.more': 'Projekt: Export, Dokumentation, mehr',
   'diagram.imageSaved': 'Bild gespeichert: {file}',
   'problems.rename': 'Datei in {name} umbenennen',
   'tab.close': 'Schließen',
@@ -508,6 +509,15 @@ const de = {
   'status.aiOff': 'KI aus',
   'home.aiOff': 'KI ist ausgeschaltet',
   'home.aiOn': 'In den Einstellungen einschalten',
+  'saveAs.title': 'Projekt speichern unter …',
+  'saveAs.done': 'Du arbeitest jetzt an der Kopie: {dir}',
+  'javadoc.title': 'Projektdokumentation erzeugen (Javadoc)',
+  'javadoc.running': 'Javadoc läuft …',
+  'javadoc.done': 'Dokumentation erzeugt (Ordner doc) und im Browser geöffnet.',
+  'addFiles.title': 'Klasse aus Datei hinzufügen …',
+  'addFiles.done': '{n} Klasse(n) hinzugefügt.',
+  'err.javadocFailed': 'Javadoc hat nicht geklappt: {message}',
+  'err.noClasses': 'Das Projekt hat noch keine Klassen.',
 };
 
 const en = {
@@ -876,6 +886,7 @@ const en = {
   'diagram.showUses': 'Show uses arrows',
   'diagram.arrange': 'Arrange again',
   'diagram.saveImage': 'Save as image (PNG)',
+  'diagram.more': 'Project: export, documentation, more',
   'diagram.imageSaved': 'Image saved: {file}',
   'problems.rename': 'Rename file to {name}',
   'tab.close': 'Close',
@@ -1017,6 +1028,15 @@ const en = {
   'status.aiOff': 'AI off',
   'home.aiOff': 'AI is turned off',
   'home.aiOn': 'Turn it on in Settings',
+  'saveAs.title': 'Save project as …',
+  'saveAs.done': 'You are now working on the copy: {dir}',
+  'javadoc.title': 'Generate project documentation (Javadoc)',
+  'javadoc.running': 'Javadoc is running …',
+  'javadoc.done': 'Documentation generated (doc folder) and opened in the browser.',
+  'addFiles.title': 'Add class from file …',
+  'addFiles.done': '{n} class(es) added.',
+  'err.javadocFailed': 'Javadoc did not work: {message}',
+  'err.noClasses': 'The project has no classes yet.',
 };
 
 const dict = { de, en };

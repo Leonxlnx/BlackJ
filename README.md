@@ -19,7 +19,11 @@
 </tr>
 <tr>
 <td><img src="docs/screenshots/packages.png" alt="Pakete im Klassendiagramm"><br><sub>Pakete wie in BlueJ</sub></td>
+<td><img src="docs/screenshots/library.png" alt="Bibliotheksklasse verwenden"><br><sub>Bibliotheksklassen wie Math oder ArrayList ausprobieren</sub></td>
+</tr>
+<tr>
 <td><img src="docs/screenshots/light.png" alt="Helles Design"><br><sub>Helles und dunkles Design</sub></td>
+<td><img src="docs/screenshots/home.png" alt="Startseite"><br><sub>Startseite mit zuletzt geöffneten Projekten</sub></td>
 </tr>
 </table>
 
@@ -37,7 +41,8 @@
 - Debugger: Haltepunkte, Schritt / Hinein / Heraus, Aufrufstapel und Variablen
 - JUnit 4 und 5: Tests ausführen, Ergebnis je Test, **Testmethode aufzeichnen** wie in BlueJ
 - Quelltext / Dokumentation umschalten (aus den Javadoc-Kommentaren), farbige Blöcke (Scope-Highlighting)
-- Als JAR exportieren, Projekte als **ZIP öffnen und als ZIP abgeben** (ohne `.class`-Dateien)
+- Als JAR exportieren, Projekte als **ZIP öffnen und als ZIP abgeben** (ohne `.class`-Dateien), Projekt speichern unter
+- Projektdokumentation mit Javadoc erzeugen, Klasse aus Datei hinzufügen (die `package`-Zeile wird angepasst)
 - **BlueJ-Projekte öffnen sich direkt** – inklusive Paketen, `+libs`-Bibliotheken und Positionen aus `package.bluej`. BlackJ verändert die `package.bluej`-Dateien nicht.
 
 **Und mehr**

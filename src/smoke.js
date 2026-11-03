@@ -36,9 +36,11 @@ export async function runSmoke() {
     await until(() => document.querySelector('.home-grid'));
     await shot('01-home');
   });
+  let tiereDir = null;
   await step('open example Tiere', async () => {
     await A.openExample('Tiere');
     await until(() => document.querySelectorAll('.class-card').length === 5);
+    tiereDir = getState().project.dir;
     await shot('02-project');
   });
   await step('compile, objects, live inspector', async () => {
@@ -139,7 +141,10 @@ export async function runSmoke() {
     await until(() => document.querySelectorAll('.edges path.uses').length === 0);
     await A.updateSettings({ showUses: true });
     await until(() => document.querySelectorAll('.edges path.uses').length > 0);
-    document.querySelector('.diagram-export').click();
+    document.querySelector('.diagram-more').click();
+    await until(() => document.querySelectorAll('.menu .menu-item').length >= 8);
+    await shot('09a-project-menu');
+    [...document.querySelectorAll('.menu .menu-item')].find((el) => el.textContent.includes('Als Bild speichern')).click();
     await until(() => [...document.querySelectorAll('.toast')].some((el) => el.textContent.includes('diagram-export.png')), 8000);
   });
   await step('change from outside is picked up', async () => {
@@ -256,6 +261,18 @@ export async function runSmoke() {
     await A.openPath(r.file);
     await until(() => getState().project && getState().project.name === 'Bibliothek' && getState().files['medien/Buch.java'] && getState().project.dir !== r.file);
     if (!/Bibliothek-export/.test(getState().project.dir)) throw new Error(getState().project.dir);
+  });
+  await step('save as, add class from file, javadoc', async () => {
+    const ok = await A.saveProjectAs('Bibliothek Kopie');
+    if (!ok || !/Bibliothek Kopie$/.test(getState().project.dir) || !getState().files['medien/Buch.java']) throw new Error(getState().project && getState().project.dir);
+    A.enterPackage('medien');
+    const added = await A.addClassesFromFiles([tiereDir + '\\Tier.java']);
+    const f = getState().files['medien/Tier.java'];
+    if (!added || !f || !f.content.startsWith('package medien;')) throw new Error(JSON.stringify(f && f.content.slice(0, 80)));
+    await until(() => document.querySelectorAll('.class-card').length === 4);
+    A.enterPackage('');
+    const doc = await A.generateJavadoc();
+    if (!doc || !/doc[\\/]index\.html$/.test(doc.index)) throw new Error(JSON.stringify(doc));
   });
   await step('learn page', async () => {
     A.go('learn');

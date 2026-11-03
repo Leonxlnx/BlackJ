@@ -113,6 +113,50 @@ export async function removeRecent(dir) {
 export const openDialog = () => handleOpen(api.project.openDialog());
 export const openZip = () => handleOpen(api.project.openZipDialog());
 
+/** Project → Save As: works on a copy from now on, the original stays as it was. */
+export async function saveProjectAs(name) {
+  if (!getState().project) return false;
+  await saveAll();
+  const ok = await handleOpen(api.project.saveAs(name ? { name } : {}));
+  if (ok) toast(t('saveAs.done', { dir: getState().project.dir }));
+  return ok;
+}
+
+/** Tools → Project Documentation: Javadoc for every class, opened in the browser. */
+export async function generateJavadoc() {
+  const s = getState();
+  if (!s.project) return null;
+  await saveAll();
+  setState({ javadocBusy: true });
+  toast(t('javadoc.running'));
+  const r = await api.project.javadoc();
+  setState({ javadocBusy: false });
+  if (r.ok) toast(t('javadoc.done'));
+  else toast(errorText(r.error), 'bad');
+  return r.ok ? r.result : null;
+}
+
+/** Edit → Add Class from File: copies .java files into the package that is open in the diagram. */
+export async function addClassesFromFiles(files) {
+  const s = getState();
+  if (!s.project || s.project.readOnly) return null;
+  const r = await api.project.addFiles({ pkg: s.pkg, ...(files ? { files } : {}) });
+  if (!r.ok) {
+    if (r.error.code !== 'canceled') toast(errorText(r.error), 'bad');
+    return null;
+  }
+  setState((st) => {
+    const next = { ...st.files };
+    for (const f of r.result) next[f.name] = { ...f, pkg: f.pkg || '', saved: f.content };
+    return { files: next };
+  });
+  setState((st) => ({ positions: autoLayout(projectModel(getState().files), st.positions, s.pkg) }));
+  persistPositions();
+  if (r.result[0]) openFile(r.result[0].name);
+  toast(t('addFiles.done', { n: r.result.length }));
+  return r.result;
+}
+
 export async function saveDiagramImage(rect) {
   const s = getState();
   if (!s.project) return null;

@@ -91,6 +91,25 @@ check('archives leave out compiled classes', () => {
   assert.ok(!list.some((f) => /\.(class|ctxt)$/.test(f)), list.join(', '));
 });
 
+check('add class from file fixes the package line', () => {
+  const proj = path.join(tmp, 'add');
+  fs.mkdirSync(proj, { recursive: true });
+  const src = path.join(tmp, 'Vogel.java');
+  fs.writeFileSync(src, '/* Kopf */\npackage alt.zoo;\n\nimport java.util.List;\n\npublic class Vogel {}\n');
+  const a = project.addFile(proj, src, 'tiere');
+  assert.strictEqual(a.name, 'tiere/Vogel.java');
+  assert.strictEqual(a.className, 'tiere.Vogel');
+  assert.ok(a.content.startsWith('/* Kopf */\npackage tiere;\n'), a.content);
+  assert.ok(!a.content.includes('alt.zoo'));
+  const b = project.addFile(proj, src, '');
+  assert.ok(!/package/.test(b.content), b.content);
+  assert.ok(b.content.includes('import java.util.List;'));
+  fs.writeFileSync(path.join(tmp, 'Nest.java'), 'class Nest {}\n');
+  const c = project.addFile(proj, path.join(tmp, 'Nest.java'), 'tiere.voegel');
+  assert.strictEqual(c.content, 'package tiere.voegel;\n\nclass Nest {}\n');
+  assert.throws(() => project.addFile(proj, src, 'tiere'), (e) => e.code === 'exists');
+});
+
 if (hasTar) {
   check('our archives open in tar, and tar archives open in BlackJ', () => {
     const listed = spawnSync(tar, ['-tf', path.join(tmp, 'ours.zip')], { encoding: 'utf8' });

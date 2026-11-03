@@ -375,8 +375,32 @@ export default function Diagram({ model }) {
             <Icon name="arrange" />
           </button>
         )}
-        <button className="icon-btn diagram-export" aria-label={t('diagram.saveImage')} title={t('diagram.saveImage')} onClick={exportImage} disabled={!keys.length}>
-          <Icon name="image" />
+        <button
+          className="icon-btn diagram-more"
+          aria-label={t('diagram.more')}
+          title={t('diagram.more')}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            A.openMenu({
+              x: r.left,
+              y: r.bottom + 4,
+              items: [
+                { label: t('addFiles.title'), icon: 'file', disabled: readOnly, onClick: () => A.addClassesFromFiles() },
+                { label: t('lib.title'), icon: 'book', onClick: () => A.openDialogBox({ type: 'library' }) },
+                { type: 'sep' },
+                { label: t('diagram.saveImage'), icon: 'image', disabled: !keys.length, onClick: exportImage },
+                { label: t('javadoc.title'), icon: 'book', disabled: !model.list.length, onClick: A.generateJavadoc },
+                { type: 'sep' },
+                { label: t('saveAs.title'), icon: 'save', onClick: () => A.saveProjectAs() },
+                { label: t('zip.export'), icon: 'save', onClick: () => A.exportZip() },
+                { label: t('jar.title'), icon: 'save', onClick: () => A.openDialogBox({ type: 'jar' }) },
+                { type: 'sep' },
+                { label: t('ws.reveal'), icon: 'folderOpen', onClick: () => window.blackj.project.reveal() },
+              ],
+            });
+          }}
+        >
+          <Icon name="more" />
         </button>
       </div>
       <div className={'diagram' + (panning ? ' panning' : '')} ref={hostRef} onPointerDown={startPan} onWheel={onWheel}>

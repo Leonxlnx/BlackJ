@@ -174,6 +174,23 @@ function copyExample(src, targetParent) {
   return target;
 }
 
+/** Copies a .java file into the project (into package pkg) and fixes its package line, like BlueJ's "Add Class from File". */
+function addFile(dir, file, pkg) {
+  const name = path.basename(file);
+  if (!name.endsWith('.java') || !IDENT.test(name.slice(0, -5))) throw Object.assign(new Error('invalid file name'), { code: 'invalidName' });
+  const parts = pkg ? String(pkg).split('.') : [];
+  const rel = [...parts, name].join('/');
+  const full = safeFile(dir, rel);
+  if (fs.existsSync(full)) throw Object.assign(new Error('class exists'), { code: 'exists' });
+  let content = fs.readFileSync(file, 'utf8').replace(/^﻿/, '');
+  const decl = /^(\s*(?:\/\*[\s\S]*?\*\/\s*|\/\/[^\n]*\n\s*)*)package\s+[\w.]+\s*;[ \t]*\r?\n?/;
+  if (decl.test(content)) content = content.replace(decl, pkg ? `$1package ${pkg};\n` : '$1');
+  else if (pkg) content = `package ${pkg};\n\n` + content;
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, content, 'utf8');
+  return { name: rel, className: [...parts, name.slice(0, -5)].join('.'), pkg: parts.join('.'), content };
+}
+
 /** A free folder name below parent: "Name", "Name 2", ... */
 function freeDir(parent, base) {
   let target = path.join(parent, base);
@@ -233,4 +250,4 @@ function createProject(parent, name) {
   return dir;
 }
 
-module.exports = { open, writeFile, renameFile, createClass, createPackage, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, freeDir, projectRoot, archiveFiles, IDENT };
+module.exports = { open, writeFile, renameFile, createClass, createPackage, addFile, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, freeDir, projectRoot, archiveFiles, IDENT };
