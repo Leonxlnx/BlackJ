@@ -132,7 +132,7 @@ async function classMenu(cls, x, y, t) {
   items.push({ type: 'sep' });
   items.push({ label: t('menu.open'), icon: 'file', onClick: () => A.openClass(cls) });
   if (info && !info.isTest && info.kind !== 'interface' && !s.project.readOnly) items.push({ label: t('menu.createTest'), icon: 'check', onClick: () => A.newClass(simple + 'Test', 'test') });
-  items.push({ label: t('menu.explain'), icon: 'tutor', onClick: () => { A.openClass(cls); setTimeout(() => A.askTutor(t('tutor.prompt.explainClass', { name: simple })), 50); } });
+  if (!s.settings.aiOff) items.push({ label: t('menu.explain'), icon: 'tutor', onClick: () => { A.openClass(cls); setTimeout(() => A.askTutor(t('tutor.prompt.explainClass', { name: simple })), 50); } });
   if (!s.project.readOnly) {
     items.push({ type: 'sep' });
     items.push({ label: t('menu.delete'), icon: 'trash', danger: true, onClick: () => A.openDialogBox({ type: 'delete', cls }) });
@@ -195,7 +195,7 @@ export default function Diagram({ model }) {
   const minY0 = keys.length ? Math.min(...keys.map((k) => pos(k).y)) : 32;
   const noteAt = { x: minX0, y: minY0 - 96 };
   const hasNote = (readme && !pkg) || !!pkg;
-  const fit = () => {
+  const fit = (minK = 0.55) => {
     const host = hostRef.current;
     if (!host || !keys.length) return;
     const xs = keys.map((k) => pos(k).x);
@@ -206,8 +206,27 @@ export default function Diagram({ model }) {
     const minY = Math.min(...ys) - 24;
     const w = Math.max(...x2) - minX + 24;
     const h = Math.max(...y2) - minY + 76;
-    const k = Math.min(1, Math.max(0.55, Math.min(host.clientWidth / w, host.clientHeight / h)));
+    const k = Math.min(1, Math.max(minK, Math.min(host.clientWidth / w, host.clientHeight / h)));
     setView({ k, x: (host.clientWidth - w * k) / 2 - minX * k, y: Math.max(0, (host.clientHeight - h * k) / 2) - minY * k });
+  };
+
+  /** Saves the whole diagram as a PNG, e.g. for a project report: fitted, without the zoom tools. */
+  const exportImage = async () => {
+    const host = hostRef.current;
+    if (!host || !keys.length) return;
+    const before = view;
+    setState({ selectedClass: null, highlightClass: null });
+    fit(0.3);
+    host.classList.add('exporting');
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await new Promise((r) => setTimeout(r, 80));
+    const b = host.getBoundingClientRect();
+    try {
+      await A.saveDiagramImage({ x: b.left, y: b.top, width: b.width, height: b.height });
+    } finally {
+      host.classList.remove('exporting');
+      setView(before);
+    }
   };
 
   useEffect(() => {
@@ -356,6 +375,9 @@ export default function Diagram({ model }) {
             <Icon name="arrange" />
           </button>
         )}
+        <button className="icon-btn diagram-export" aria-label={t('diagram.saveImage')} title={t('diagram.saveImage')} onClick={exportImage} disabled={!keys.length}>
+          <Icon name="image" />
+        </button>
       </div>
       <div className={'diagram' + (panning ? ' panning' : '')} ref={hostRef} onPointerDown={startPan} onWheel={onWheel}>
         {keys.length === 0 && !pkg ? (
@@ -501,7 +523,7 @@ export default function Diagram({ model }) {
           <button className="icon-btn" aria-label="Zoom out" onClick={() => zoomBy(0.85)}><Icon name="minus" /></button>
           <span className="zoom-label">{Math.round(view.k * 100)}%</span>
           <button className="icon-btn" aria-label="Zoom in" onClick={() => zoomBy(1.15)}><Icon name="plus" /></button>
-          <button className="icon-btn" aria-label={t('diagram.fit')} title={t('diagram.fit')} onClick={fit}><Icon name="fit" /></button>
+          <button className="icon-btn" aria-label={t('diagram.fit')} title={t('diagram.fit')} onClick={() => fit()}><Icon name="fit" /></button>
         </div>
         {kinds.size > 0 && (
           <div className="diagram-legend" aria-hidden="true">

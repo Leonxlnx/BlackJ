@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('blackj', {
     createPackage: invoke('project:createPackage'),
     rename: invoke('project:rename'),
     exportJar: invoke('project:exportJar'),
+    exportZip: invoke('project:exportZip'),
+    openZipDialog: invoke('project:openZipDialog'),
   },
   compile: invoke('compile'),
   bench: {
@@ -55,6 +57,9 @@ contextBridge.exposeInMainWorld('blackj', {
     complete: invoke('ai:complete'),
     edit: invoke('ai:edit'),
     onEvent: listen('ai:event'),
+  },
+  diagram: {
+    savePng: invoke('diagram:savePng'),
   },
   windowTheme: invoke('window:theme'),
   onOpenPath: listen('app:openPath'),

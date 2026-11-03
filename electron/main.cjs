@@ -7,6 +7,7 @@ const { findJdks, asJdk } = require('./jdk.cjs');
 const { compile } = require('./compiler.cjs');
 const { Bench } = require('./bench.cjs');
 const project = require('./project.cjs');
+const zip = require('./zip.cjs');
 const { Settings } = require('./settings.cjs');
 const { Tutor } = require('./ai.cjs');
 const tests = require('./tests.cjs');
@@ -218,6 +219,15 @@ function flushWatch() {
   watchPending.clear();
 }
 
+const isArchive = (file) => /\.(zip|jar)$/i.test(file) && fs.statSync(file).isFile();
+
+/** Unpacks a project archive into the projects folder and returns the project folder inside it. */
+function importArchive(file) {
+  const dest = project.freeDir(projectsHome(), path.basename(file).replace(/\.(zip|jar)$/i, '') || 'Projekt');
+  zip.extractZip(file, dest);
+  return project.projectRoot(dest);
+}
+
 function openProject(dir) {
   const data = project.open(dir);
   watchProject(data.dir);
@@ -291,9 +301,64 @@ function registerIpc() {
 
   ipcMain.handle('project:open', (_e, dir) => wrap(() => {
     if (!fs.existsSync(dir)) throw Object.assign(new Error('missing'), { code: 'missing' });
+    if (isArchive(dir)) return openProject(importArchive(dir));
     // A dropped .java file or package.bluej opens the folder it lives in.
     return openProject(fs.statSync(dir).isFile() ? path.dirname(dir) : dir);
   }));
+
+  ipcMain.handle('project:openZipDialog', async () => {
+    const r = await dialog.showOpenDialog(win, {
+      title: 'ZIP- oder JAR-Datei öffnen',
+      properties: ['openFile'],
+      filters: [{ name: 'Projektarchiv', extensions: ['zip', 'jar'] }],
+    });
+    if (r.canceled || !r.filePaths[0]) return { ok: false, error: { code: 'canceled' } };
+    return wrap(() => openProject(importArchive(r.filePaths[0])));
+  });
+
+  ipcMain.handle('diagram:savePng', async (_e, { rect, name }) => {
+    const area = { x: Math.max(0, Math.round(rect.x)), y: Math.max(0, Math.round(rect.y)), width: Math.round(rect.width), height: Math.round(rect.height) };
+    if (area.width < 20 || area.height < 20) return fail({ code: 'invalidName' });
+    const img = await win.webContents.capturePage(area);
+    let file = smokeDir ? path.join(smokeDir, 'diagram-export.png') : null;
+    if (!file) {
+      const clean = String(name || 'Klassendiagramm').replace(/[<>:"/\\|?*]/g, '').trim() || 'Klassendiagramm';
+      const r = await dialog.showSaveDialog(win, {
+        title: 'Klassendiagramm als Bild speichern',
+        defaultPath: path.join(state.dir ? path.dirname(state.dir) : projectsHome(), clean + '.png'),
+        filters: [{ name: 'PNG-Bild', extensions: ['png'] }],
+      });
+      if (r.canceled || !r.filePath) return fail({ code: 'canceled' });
+      file = r.filePath;
+    }
+    return wrap(() => {
+      fs.writeFileSync(file, img.toPNG());
+      return { file, width: img.getSize().width, height: img.getSize().height };
+    });
+  });
+
+  ipcMain.handle('project:exportZip', async (_e, opts) => {
+    if (!state.dir) return fail({ code: 'noProject' });
+    let file = smokeDir && opts && opts.file ? path.join(smokeDir, path.basename(opts.file)) : null;
+    if (!file) {
+      const r = await dialog.showSaveDialog(win, {
+        title: 'Als ZIP-Datei exportieren',
+        defaultPath: path.join(path.dirname(state.dir), path.basename(state.dir) + '.zip'),
+        filters: [{ name: 'ZIP-Archiv', extensions: ['zip'] }],
+      });
+      if (r.canceled || !r.filePath) return fail({ code: 'canceled' });
+      file = r.filePath;
+    }
+    return wrap(() => {
+      const base = path.basename(state.dir);
+      const files = project.archiveFiles(state.dir).map((rel) => {
+        const full = path.join(state.dir, ...rel.split('/'));
+        return { name: base + '/' + rel, data: fs.readFileSync(full), mtime: fs.statSync(full).mtime };
+      });
+      fs.writeFileSync(file, zip.writeZip(files));
+      return { file, count: files.length };
+    });
+  });
 
   ipcMain.handle('project:example', (_e, name) => wrap(() => {
     const src = path.join(examplesDir, path.basename(name));
@@ -488,7 +553,7 @@ function pathArgs(argv) {
     try {
       const p = path.resolve(a);
       const st = fs.statSync(p);
-      if (st.isDirectory()) out.push(p);
+      if (st.isDirectory() || /\.(zip|jar)$/i.test(p)) out.push(p);
       else if (/\.(java|bluej)$/i.test(p)) out.push(path.dirname(p));
     } catch { /* not a path */ }
   }

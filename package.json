@@ -17,7 +17,8 @@
     "test:ai": "node scripts/test-ai.cjs",
     "test:junit": "node scripts/test-junit.cjs",
     "test:debugger": "node scripts/test-debugger.cjs",
-    "test": "npm run build:bench && node scripts/test-bench.cjs && node scripts/test-ai.cjs && node scripts/test-junit.cjs && node scripts/test-debugger.cjs",
+    "test:zip": "node scripts/test-zip.cjs",
+    "test": "npm run build:bench && node scripts/test-bench.cjs && node scripts/test-ai.cjs && node scripts/test-junit.cjs && node scripts/test-debugger.cjs && node scripts/test-zip.cjs",
     "fetch:junit": "node scripts/fetch-junit.cjs",
     "dist": "npm run build && node scripts/dist.cjs"
   },

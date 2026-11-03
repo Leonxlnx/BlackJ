@@ -37,6 +37,7 @@ const P = {
   record: <circle cx="12" cy="12" r="5" />,
   sidebar: <><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><path d="M14.5 4.5v15" /></>,
   keyboard: <><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M7 14h10" /></>,
+  image: <><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.5" /><path d="M20.5 15.5l-4.5-4.5-8 8" /></>,
   arrange: <><rect x="4" y="4" width="6" height="5" rx="1" /><rect x="14" y="4" width="6" height="5" rx="1" /><rect x="9" y="15" width="6" height="5" rx="1" /><path d="M7 9v3h10V9M12 12v3" /></>,
   link: <><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>,
   stepOver: <><path d="M4 13a8 8 0 0 1 15-3" /><path d="M19.5 5v5h-5" /><circle cx="12" cy="18" r="1.5" /></>,

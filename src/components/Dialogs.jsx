@@ -59,11 +59,13 @@ function CallDialog({ dialog }) {
     const base = sname[0].toLowerCase() + sname.slice(1);
     for (let i = 1; ; i++) if (!objects.some((o) => o.name === base + i)) return base + i;
   };
+  // Library types (List, Object, Comparable …) are not in the model: any object may fit, the bench checks.
+  const fits = (o, type) => o.className && (isAssignable(model, o.className, type) || !model.list.some((c) => c.simple === simple(type)));
   const [name, setName] = useState(kind === 'new' ? suggestName() : '');
   const [args, setArgs] = useState(() => remembered.get(memoKey) || method.params.map((p) => {
     if (p.category === 'boolean') return { kind: 'text', text: 'false' };
     if (p.category === 'object') {
-      const match = objects.find((o) => o.className && isAssignable(model, o.className, p.type));
+      const match = objects.find((o) => fits(o, p.type));
       return match ? { kind: 'ref', name: match.name } : { kind: 'text', text: 'null' };
     }
     if (p.category === 'enum') {
@@ -131,10 +133,10 @@ function CallDialog({ dialog }) {
               </div>
             );
           } else if (p.category === 'object') {
-            const fits = objects.filter((o) => o.className && isAssignable(model, o.className, p.type));
+            const fitting = objects.filter((o) => fits(o, p.type));
             control = (
               <Select value={a.kind === 'ref' ? a.name : 'null'} onChange={(v) => setArg(i, v === 'null' ? { kind: 'text', text: 'null' } : { kind: 'ref', name: v })}>
-                {fits.map((o) => <option key={o.name} value={o.name}>{o.name} : {o.type}</option>)}
+                {fitting.map((o) => <option key={o.name} value={o.name}>{o.name} : {o.type}</option>)}
                 <option value="null">{t('call.null')}</option>
               </Select>
             );
@@ -148,7 +150,7 @@ function CallDialog({ dialog }) {
           } else {
             control = <input className="input mono" value={a.text} onChange={(e) => setArg(i, { kind: 'text', text: e.target.value })} placeholder={t('call.hint.' + p.category)} spellCheck="false" />;
           }
-          const noMatch = p.category === 'object' && !objects.some((o) => o.className && isAssignable(model, o.className, p.type));
+          const noMatch = p.category === 'object' && !objects.some((o) => fits(o, p.type));
           return (
             <div className="field" key={i}>
               <span className="field-label">
@@ -395,6 +397,114 @@ function JarDialog() {
   );
 }
 
+const LIBRARY_SUGGESTIONS = ['Math', 'String', 'Integer', 'Character', 'StringBuilder', 'ArrayList', 'HashMap', 'Random', 'Arrays', 'LocalDate'];
+
+const paramList = (m) => m.params.map((p) => (/^arg\d+$/.test(p.name) ? p.type : `${p.type} ${p.name}`)).join(', ');
+
+/**
+ * BlueJ's "Use Library Class", and the methods of a library object on the bench:
+ * one searchable list instead of a menu with seventy entries.
+ */
+function LibraryDialog({ dialog }) {
+  const t = useT();
+  const objectMode = !!dialog.target;
+  const [name, setName] = useState(dialog.cls || '');
+  const [desc, setDesc] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState('');
+  const filterRef = useRef(null);
+
+  const load = async (cls) => {
+    setBusy(true);
+    setError(null);
+    const r = await A.describeLibrary(cls);
+    setBusy(false);
+    if (r.error) {
+      setDesc(null);
+      setError(r.error);
+      return;
+    }
+    setDesc(r.desc);
+    setFilter('');
+    setTimeout(() => filterRef.current && filterRef.current.focus(), 0);
+  };
+  useEffect(() => {
+    if (dialog.cls) load(dialog.cls);
+  }, []);
+
+  const q = filter.trim().toLowerCase();
+  const match = (m) => !q || m.name.toLowerCase().includes(q) || paramList(m).toLowerCase().includes(q);
+  const sname = desc ? simpleName(desc.name) : '';
+  const sections = !desc
+    ? []
+    : objectMode
+      ? [{ key: 'methods', label: t('lib.methods'), items: desc.methods.filter((m) => !m.static && !m.abstract && match(m)).map((m) => ({ kind: 'method', m })) }]
+      : [
+          { key: 'ctors', label: t('lib.ctors'), items: desc.constructors.filter(match).map((m) => ({ kind: 'new', m })) },
+          { key: 'statics', label: t('lib.statics'), items: desc.methods.filter((m) => m.static && match(m)).map((m) => ({ kind: 'static', m })) },
+        ];
+  const total = sections.reduce((n, s) => n + s.items.length, 0);
+  const pick = ({ kind, m }) => A.openDialogBox({ type: 'call', kind, cls: desc.name, target: objectMode ? dialog.target : undefined, method: m });
+
+  return (
+    <Dialog
+      wide
+      title={objectMode ? t('lib.objectTitle', { name: dialog.target }) : t('lib.title')}
+      sub={objectMode ? dialog.typeLabel : desc ? desc.name : t('lib.sub')}
+      onClose={A.closeDialog}
+    >
+      {!objectMode && (
+        <form
+          className="lib-search"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (name.trim()) load(name);
+          }}
+        >
+          <label className="field">
+            <span className="field-label">{t('lib.class')}</span>
+            <span className="lib-row">
+              <input className="input mono" value={name} onChange={(e) => setName(e.target.value)} placeholder="java.util.Random" spellCheck="false" autoComplete="off" />
+              <button className="btn" type="submit" disabled={busy || !name.trim()}>{t('lib.load')}</button>
+            </span>
+          </label>
+          <div className="lib-chips" aria-label={t('lib.examples')}>
+            {LIBRARY_SUGGESTIONS.map((s) => (
+              <button type="button" key={s} className="chip" aria-pressed={sname === s} onClick={() => { setName(s); load(s); }}>{s}</button>
+            ))}
+          </div>
+        </form>
+      )}
+      {error && <div className="field-error" role="alert">{error}</div>}
+      {busy && !desc && <p className="muted">{t('lib.loading')}</p>}
+      {desc && (
+        <>
+          <input ref={filterRef} className="input lib-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t('lib.filter')} spellCheck="false" aria-label={t('lib.filter')} />
+          <div className="lib-list">
+            {total === 0 && <p className="muted">{q ? t('lib.none') : objectMode ? t('lib.noMethods') : t('lib.noStatics', { name: sname })}</p>}
+            {sections.filter((s) => s.items.length).map((s) => (
+              <section key={s.key}>
+                <h3 className="lib-head">{s.label}<span className="count">{s.items.length}</span></h3>
+                {s.items.map((it) => (
+                  <button key={it.kind + it.m.key} className="lib-item" onClick={() => pick(it)}>
+                    <span className="sig">
+                      {it.kind === 'new' ? <><span className="ret">new </span>{sname}</> : it.m.name}({paramList(it.m)})
+                    </span>
+                    {it.kind !== 'new' && <span className="lib-ret">{it.m.returnType}</span>}
+                    {it.m.inherited && <span className="lib-from">{simpleName(it.m.declaringClass)}</span>}
+                  </button>
+                ))}
+              </section>
+            ))}
+          </div>
+        </>
+      )}
+      {!desc && !busy && !error && <p className="dim">{t('lib.text')}</p>}
+    </Dialog>
+  );
+}
+
 function RecordDialog({ dialog }) {
   const t = useT();
   const [name, setName] = useState('test');
@@ -460,6 +570,7 @@ export default function Dialogs() {
   if (dialog.type === 'newPackage') return <NewPackageDialog />;
   if (dialog.type === 'jar') return <JarDialog />;
   if (dialog.type === 'record') return <RecordDialog dialog={dialog} />;
+  if (dialog.type === 'library') return <LibraryDialog key={(dialog.target || '') + (dialog.cls || '')} dialog={dialog} />;
   if (dialog.type === 'delete') return <DeleteDialog dialog={dialog} />;
   return null;
 }

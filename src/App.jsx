@@ -89,7 +89,7 @@ export default function App() {
         A.openDialogBox({ type: 'newClass' });
       } else if (mod && key === 'i') {
         e.preventDefault();
-        setState({ aiPrompt: { at: Date.now() } });
+        if (!s.settings.aiOff) setState({ aiPrompt: { at: Date.now() } });
       } else if (e.key === 'F5') {
         e.preventDefault();
         const mains = A.modelOf(s.files).list.filter((c) => c.hasMain);

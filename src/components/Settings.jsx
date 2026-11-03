@@ -101,9 +101,11 @@ export default function Settings() {
           <Row title={t('settings.clearConsole')} desc={t('settings.clearConsoleText')}>
             <Switch checked={!!s.clearConsoleOnCall} onChange={(v) => set({ clearConsoleOnCall: v })} label={t('settings.clearConsole')} />
           </Row>
-          <Row title={t('settings.aiInline')} desc={t('settings.aiInlineText')}>
-            <Switch checked={s.aiInline} onChange={(v) => set({ aiInline: v })} label={t('settings.aiInline')} />
-          </Row>
+          {!s.aiOff && (
+            <Row title={t('settings.aiInline')} desc={t('settings.aiInlineText')}>
+              <Switch checked={s.aiInline} onChange={(v) => set({ aiInline: v })} label={t('settings.aiInline')} />
+            </Row>
+          )}
         </Section>
 
         <Section title={t('settings.java')} text={t('settings.javaText')}>
@@ -131,6 +133,10 @@ export default function Settings() {
         </Section>
 
         <Section title={t('settings.tutor')} text={t('settings.tutorText')}>
+          <Row title={t('settings.aiOff')} desc={t('settings.aiOffText')}>
+            <Switch checked={!!s.aiOff} onChange={(v) => set({ aiOff: v })} label={t('settings.aiOff')} />
+          </Row>
+          {!s.aiOff && <>
           <Row title={t('settings.key')} desc={tutor.hasKey ? (tutor.stored ? t('settings.keyStored') : t('settings.keySession')) : t('settings.keyNone')} stack={!tutor.hasKey || replacing}>
             {tutor.hasKey && !replacing ? (
               <div className="action-row">
@@ -179,6 +185,7 @@ export default function Settings() {
           <Row title={t('settings.showCosts')} desc={t('settings.showCostsText')}>
             <Switch checked={s.showCosts} onChange={(v) => set({ showCosts: v })} label={t('settings.showCosts')} />
           </Row>
+          </>}
         </Section>
 
         <Section title={t('settings.about')} text={t('settings.aboutText', { version: info.version })}>

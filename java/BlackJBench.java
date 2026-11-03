@@ -19,8 +19,12 @@ import java.lang.reflect.Type;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -203,8 +207,93 @@ public class BlackJBench {
 
     // ------------------------------------------------------------------ commands
 
+    static final String[] LIBRARY_PACKAGES = { "java.lang.", "java.util.", "java.time.", "java.math.", "java.io.", "java.text.", "java.util.function." };
+
+    /** A class by name; library classes may also be given by their simple name ("Math", "ArrayList"). */
+    static Class<?> findClass(String name) throws ClassNotFoundException {
+        try {
+            return loader.loadClass(name);
+        } catch (ClassNotFoundException e) {
+            if (name.indexOf('.') >= 0) throw e;
+            for (String p : LIBRARY_PACKAGES) {
+                try {
+                    return loader.loadClass(p + name);
+                } catch (ClassNotFoundException ignored) { }
+            }
+            throw e;
+        }
+    }
+
+    /** Like BlueJ's "Use Library Class": the public constructors and methods of a library class. */
+    static Map<String, Object> describeLibrary(Class<?> c) {
+        Map<String, Object> d = new LinkedHashMap<>();
+        d.put("name", c.getName());
+        d.put("kind", kindOf(c));
+        d.put("library", true);
+        d.put("superclass", null);
+        d.put("interfaces", new ArrayList<>());
+        List<Object> ctors = new ArrayList<>();
+        if (Modifier.isPublic(c.getModifiers()) && !c.isInterface() && !Modifier.isAbstract(c.getModifiers()) && !c.isEnum()) {
+            Constructor<?>[] ks = c.getConstructors();
+            Arrays.sort(ks, Comparator.comparingInt(Constructor::getParameterCount));
+            for (Constructor<?> k : ks) {
+                if (k.isSynthetic()) continue;
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("key", key("<init>", k.getParameterTypes()));
+                m.put("name", c.getSimpleName());
+                m.put("params", params(k.getParameters()));
+                m.put("visibility", "public");
+                ctors.add(m);
+            }
+        }
+        d.put("constructors", ctors);
+        Map<String, Method> byKey = new LinkedHashMap<>();
+        for (Method m : c.getMethods()) {
+            if (m.isSynthetic() && !m.isBridge()) continue;
+            if (m.getDeclaringClass() == Object.class && !(m.getName().equals("toString") || m.getName().equals("equals") || m.getName().equals("hashCode"))) continue;
+            String k = key(m.getName(), m.getParameterTypes());
+            Method prev = byKey.get(k);
+            // Keep the real method over a compiler bridge, and the most specific return type.
+            if (prev == null || (prev.isBridge() && !m.isBridge())
+                    || (prev.isBridge() == m.isBridge() && prev.getReturnType() != m.getReturnType() && prev.getReturnType().isAssignableFrom(m.getReturnType()))) {
+                byKey.put(k, m);
+            }
+        }
+        List<Method> sorted = new ArrayList<>(byKey.values());
+        sorted.sort(Comparator.comparing(Method::getName).thenComparingInt(Method::getParameterCount));
+        List<Object> methods = new ArrayList<>();
+        for (Method m : sorted) methods.add(methodInfo(m, m.getDeclaringClass() != c && !m.isBridge()));
+        d.put("methods", methods);
+        return d;
+    }
+
+    /** A method the bench may call: inside a closed module, the same method seen through a public type. */
+    static Method accessible(Method m, Class<?> c) {
+        try {
+            m.setAccessible(true);
+            return m;
+        } catch (RuntimeException closed) { /* module boundary */ }
+        Deque<Class<?>> todo = new ArrayDeque<>();
+        Set<Class<?>> seen = new HashSet<>();
+        todo.add(c);
+        while (!todo.isEmpty()) {
+            Class<?> k = todo.poll();
+            if (!seen.add(k)) continue;
+            if (Modifier.isPublic(k.getModifiers())) {
+                try {
+                    Method p = k.getMethod(m.getName(), m.getParameterTypes());
+                    if (Modifier.isPublic(p.getDeclaringClass().getModifiers())) return p;
+                } catch (NoSuchMethodException ignored) { }
+            }
+            if (k.getSuperclass() != null) todo.add(k.getSuperclass());
+            todo.addAll(Arrays.asList(k.getInterfaces()));
+        }
+        return m;
+    }
+
     static Map<String, Object> describe(String className) throws Exception {
-        Class<?> c = loader.loadClass(className);
+        Class<?> c = findClass(className);
+        if (!isProjectClass(c)) return describeLibrary(c);
         Map<String, Object> d = new LinkedHashMap<>();
         d.put("name", c.getName());
         d.put("kind", kindOf(c));
@@ -277,7 +366,7 @@ public class BlackJBench {
     }
 
     static Object doNew(Map<String, Object> req) throws Throwable {
-        Class<?> c = loader.loadClass(str(req.get("className")));
+        Class<?> c = findClass(str(req.get("className")));
         if (c.isInterface()) throw new BenchError("interface", "type", c.getSimpleName());
         if (Modifier.isAbstract(c.getModifiers())) throw new BenchError("abstractClass", "type", c.getSimpleName());
         String wanted = str(req.get("key"));
@@ -286,7 +375,9 @@ public class BlackJBench {
             if (key("<init>", k.getParameterTypes()).equals(wanted)) ctor = k;
         }
         if (ctor == null) throw new BenchError("notFound", "name", wanted);
-        ctor.setAccessible(true);
+        try {
+            ctor.setAccessible(true);
+        } catch (RuntimeException closed) { /* public library constructor: callable as it is */ }
         Object[] args = convertArgs(ctor.getParameters(), req.get("args"));
         String name = benchName((String) req.get("name"), c);
         Object o;
@@ -311,12 +402,12 @@ public class BlackJBench {
             target = resolve(ref);
             c = target.getClass();
         } else {
-            c = loader.loadClass(str(req.get("className")));
+            c = findClass(str(req.get("className")));
         }
         String wanted = str(req.get("key"));
         Method method = findMethod(c, wanted);
         if (method == null) throw new BenchError("notFound", "name", wanted);
-        method.setAccessible(true);
+        method = accessible(method, c);
         Object[] args = convertArgs(method.getParameters(), req.get("args"));
         Object result;
         try {

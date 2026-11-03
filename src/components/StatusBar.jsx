@@ -55,7 +55,8 @@ export default function StatusBar() {
       </div>
       <div className="sb-group">
         {inProject && cursor && <span className="sb-item">{t('status.ln', { line: cursor.line, col: cursor.col })}</span>}
-        {inProject && (
+        {inProject && settings.aiOff && <span className="sb-item off">{t('status.aiOff')}</span>}
+        {inProject && !settings.aiOff && (
           <button
             className={'sb-item' + (settings.aiInline && info.tutor.hasKey ? '' : ' off')}
             onClick={() => A.updateSettings({ aiInline: !settings.aiInline })}

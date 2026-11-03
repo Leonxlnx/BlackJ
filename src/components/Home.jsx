@@ -119,6 +119,7 @@ export default function Home() {
                       <Icon name="folderOpen" />
                       {t('home.openButton')}
                     </button>
+                    <button className="btn btn-quiet" onClick={A.openZip}>{t('zip.openShort')}</button>
                   </div>
                   <p className="muted">{t('home.openHint')}</p>
                 </div>
@@ -161,10 +162,10 @@ export default function Home() {
                 </div>
               </div>
               <div className="status-row">
-                <span className={'status-dot' + (info.tutor.hasKey ? '' : ' off')} />
+                <span className={'status-dot' + (info.tutor.hasKey && !settings.aiOff ? '' : ' off')} />
                 <div>
-                  <div>{info.tutor.hasKey ? t('home.tutorReady', { model: model ? model.label : settings.model }) : t('home.tutorMissing')}</div>
-                  {!info.tutor.hasKey && <button className="link small" onClick={() => A.go('settings')}>{t('home.tutorSetup')}</button>}
+                  <div>{settings.aiOff ? t('home.aiOff') : info.tutor.hasKey ? t('home.tutorReady', { model: model ? model.label : settings.model }) : t('home.tutorMissing')}</div>
+                  {(settings.aiOff || !info.tutor.hasKey) && <button className="link small" onClick={() => A.go('settings')}>{settings.aiOff ? t('home.aiOn') : t('home.tutorSetup')}</button>}
                 </div>
               </div>
             </div>

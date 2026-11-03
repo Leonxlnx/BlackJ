@@ -139,6 +139,8 @@ export async function runSmoke() {
     await until(() => document.querySelectorAll('.edges path.uses').length === 0);
     await A.updateSettings({ showUses: true });
     await until(() => document.querySelectorAll('.edges path.uses').length > 0);
+    document.querySelector('.diagram-export').click();
+    await until(() => [...document.querySelectorAll('.toast')].some((el) => el.textContent.includes('diagram-export.png')), 8000);
   });
   await step('change from outside is picked up', async () => {
     const f = getState().files['Katze.java'];
@@ -169,6 +171,16 @@ export async function runSmoke() {
     await until(() => document.querySelectorAll('.palette-item').length > 5);
     await shot('11-palette');
     A.closePalette();
+  });
+  await step('editor right-click menu', async () => {
+    A.openFile('Hund.java');
+    await until(() => document.querySelector('.editor-host .view-lines .view-line'));
+    const el = document.querySelector('.editor-host .view-lines');
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 80, clientY: r.top + 60, button: 2 }));
+    await until(() => document.querySelectorAll('.menu .menu-item').length >= 6, 5000);
+    await shot('11b-editor-menu');
+    A.closeMenu();
   });
   await step('AI diff view', async () => {
     const f = getState().files['Hund.java'];
@@ -217,6 +229,34 @@ export async function runSmoke() {
       A.closeDialog();
     });
   }
+  await step('library classes: Math, an ArrayList on the bench', async () => {
+    A.openDialogBox({ type: 'library', cls: 'Math' });
+    await until(() => document.querySelectorAll('.lib-item').length > 20);
+    await shot('16b-library');
+    const math = (await A.describeLibrary('Math')).desc;
+    await A.callMethod({ cls: math.name, method: math.methods.find((m) => m.key === 'max(int,int)'), args: [{ kind: 'text', text: '3' }, { kind: 'text', text: '7' }] });
+    const d = getState().dialog;
+    if (!d || d.type !== 'result' || d.result.value.text !== '7') throw new Error(JSON.stringify(d && d.result));
+    A.closeDialog();
+    const list = (await A.describeLibrary('ArrayList')).desc;
+    await A.createObject(list.name, list.constructors.find((c) => c.params.length === 0), [], 'liste');
+    const obj = getState().bench.objects.find((o) => o.name === 'liste');
+    A.openDialogBox({ type: 'library', target: 'liste', cls: obj.className, typeLabel: obj.type });
+    await until(() => document.querySelectorAll('.lib-item').length > 10);
+    await shot('16c-library-object');
+    A.closeDialog();
+    await A.callMethod({ target: 'liste', cls: list.name, method: list.methods.find((m) => m.key === 'add(java.lang.Object)'), args: [{ kind: 'ref', name: 'momo' }] });
+    await A.callMethod({ target: 'liste', cls: list.name, method: list.methods.find((m) => m.key === 'size()'), args: [] });
+    if (getState().dialog.result.value.text !== '1') throw new Error(JSON.stringify(getState().dialog.result));
+    A.closeDialog();
+  });
+  await step('ZIP export and import', async () => {
+    const r = await A.exportZip('Bibliothek-export.zip');
+    if (!r || r.count < 6) throw new Error(JSON.stringify(r));
+    await A.openPath(r.file);
+    await until(() => getState().project && getState().project.name === 'Bibliothek' && getState().files['medien/Buch.java'] && getState().project.dir !== r.file);
+    if (!/Bibliothek-export/.test(getState().project.dir)) throw new Error(getState().project.dir);
+  });
   await step('learn page', async () => {
     A.go('learn');
     await until(() => document.querySelector('.learn-detail'));
@@ -226,6 +266,16 @@ export async function runSmoke() {
     A.go('settings');
     await until(() => document.querySelector('.set-section'));
     await shot('18-settings');
+  });
+  await step('AI switched off hides every AI control', async () => {
+    await A.updateSettings({ aiOff: true });
+    A.go('project');
+    setState({ tutorOpen: true });
+    await until(() => document.querySelector('.panel.side'));
+    if ([...document.querySelectorAll('.panel.side .tab-label')].some((el) => /Tutor/.test(el.textContent))) throw new Error('tutor tab still shown');
+    if (document.querySelector('.ai-btn')) throw new Error('AI button still shown');
+    await shot('18b-ai-off');
+    await A.updateSettings({ aiOff: false });
   });
   await step('light theme', async () => {
     await A.openExample('Tiere');

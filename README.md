@@ -31,21 +31,23 @@
 - Klassendiagramm mit Vererbung (`extends`, `implements`) und Benutzt-Pfeilen, Pakete als Ordner zum Hineinklicken, README-Notiz
 - Objekte erzeugen (Rechtsklick → `new …`), Methoden aufrufen, Rückgabewerte ansehen, Objekte als Parameter übergeben
 - Objekte inspizieren, auch private und geerbte Attribute, Klassenvariablen (static)
+- Bibliotheksklassen verwenden: `Math`, `String`, `ArrayList`, `Random` … direkt ausprobieren, Methoden als durchsuchbare Liste statt endlosem Menü
 - Code Pad: Java eintippen, Wert sehen, Variablen bleiben erhalten
 - Konsole mit Eingabe (`Scanner`), `main` starten, Programm stoppen
 - Debugger: Haltepunkte, Schritt / Hinein / Heraus, Aufrufstapel und Variablen
 - JUnit 4 und 5: Tests ausführen, Ergebnis je Test, **Testmethode aufzeichnen** wie in BlueJ
 - Quelltext / Dokumentation umschalten (aus den Javadoc-Kommentaren), farbige Blöcke (Scope-Highlighting)
-- Als JAR exportieren
+- Als JAR exportieren, Projekte als **ZIP öffnen und als ZIP abgeben** (ohne `.class`-Dateien)
 - **BlueJ-Projekte öffnen sich direkt** – inklusive Paketen, `+libs`-Bibliotheken und Positionen aus `package.bluej`. BlackJ verändert die `package.bluej`-Dateien nicht.
 
 **Und mehr**
 - Moderner Editor (Monaco, der Editor aus VS Code) mit Autovervollständigung für eigene Klassen, Snippets (`sout`, `fori`, `get`, `set`, `test`) und Erklärungen beim Überfahren von Schlüsselwörtern
 - Jeder Compilerfehler und jede Exception wird auf Deutsch erklärt, mit Tipp zur Lösung
 - Live-Inspektor neben dem Code, Objektkarten zeigen ihre Attributwerte
+- Klassendiagramm als PNG speichern, zum Beispiel für den Projektbericht
 - Befehlspalette (`Strg+P`) für Klassen, Methoden, Befehle und Lernbegriffe, Tastenkürzel-Übersicht mit `F1`
 - Passt sich kleinen Schulbildschirmen an (1280×720), Projekte per Drag & Drop öffnen, Änderungen von außen werden übernommen
-- Lernen-Seite mit den wichtigsten OOP-Begriffen und Beispielen
+- Lernen-Seite mit den wichtigsten OOP-Begriffen, Beispielen und Suche
 - Dunkles und helles Design, Deutsch und Englisch
 
 **KI (optional, mit eigenem API-Schlüssel)**
@@ -53,6 +55,7 @@
 - KI-Vorschläge beim Tippen (grauer Text, `Tab` übernimmt)
 - `Strg+I`: „Mit KI schreiben“ – Änderung erscheint als Vergleich, du entscheidest
 - „Mit KI beheben“ bei Compilerfehlern
+- Ein Schalter blendet alle KI-Funktionen aus, zum Beispiel für Klassenarbeiten
 - Der Schlüssel bleibt auf deinem PC (verschlüsselt oder nur für die Sitzung). Fragen und Code gehen an Anthropic.
 
 ## Benutzen
@@ -82,7 +85,7 @@ Voraussetzungen: Node.js 22, ein JDK ab 11.
 npm install
 npm run fetch:junit   # lädt die JUnit-Jars von Maven Central
 npm start             # baut alles und startet BlackJ
-npm test              # Compiler, Objektbank, Code Pad, KI, JUnit, Debugger
+npm test              # Compiler, Objektbank, Code Pad, KI, JUnit, Debugger, ZIP
 npm run dist          # baut BlackJ.exe (portable)
 ```
 
@@ -96,6 +99,6 @@ BlackJ zeichnet ohne Grafikkarte, und Programme der Schüler laufen mit abgescha
 
 ### English
 
-BlackJ is a BlueJ-style Java IDE for school: class diagram, interactive object bench, code pad, debugger, JUnit with test recording, plain-language error explanations, and an optional AI tutor that uses your own Claude API key. It opens BlueJ projects as they are. Download `BlackJ.exe` from the [latest release](../../releases/latest); the interface is available in German and English.
+BlackJ is a BlueJ-style Java IDE for school: class diagram, interactive object bench (also for library classes such as `Math` or `ArrayList`), code pad, debugger, JUnit with test recording, ZIP import and export, plain-language error explanations, and an optional AI tutor that uses your own Claude API key. It opens BlueJ projects as they are. Download `BlackJ.exe` from the [latest release](../../releases/latest); the interface is available in German and English.
 
 BlackJ is an independent project and not affiliated with the BlueJ team. [MIT License](LICENSE). JUnit jars are redistributed under their own licences (see `resources/junit/LICENSES.txt`).

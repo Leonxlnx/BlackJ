@@ -11,6 +11,7 @@ const DEFAULTS = {
   diagramDetails: true,
   scopeColors: true,
   aiInline: true,
+  aiOff: false,
   showUses: true,
   clearConsoleOnCall: false,
   jdkPath: null,

@@ -57,13 +57,17 @@ export default function CommandPalette() {
       cmd(t('diagram.newPackage'), () => A.openDialogBox({ type: 'newPackage' }), '', 'folder');
       if (model.list.some((c) => c.isTest)) cmd(t('tests.runAll'), () => A.runTests({ all: true }), '', 'check');
       cmd(t('pad.open'), () => setState({ dock: 'pad' }), '', 'terminal');
+      cmd(t('lib.title'), () => A.openDialogBox({ type: 'library' }), '', 'book');
       cmd(t('jar.title'), () => A.openDialogBox({ type: 'jar' }), '', 'save');
+      cmd(t('zip.export'), () => A.exportZip(), '', 'save');
       cmd(t('ws.reset'), A.stopProgram, '', 'reset');
-      cmd(t('ai.write'), () => setState({ aiPrompt: { at: Date.now() } }), 'Strg+I', 'tutor');
+      if (!s.settings.aiOff) cmd(t('ai.write'), () => setState({ aiPrompt: { at: Date.now() } }), 'Strg+I', 'tutor');
       cmd(t('menu.readme'), A.openReadme, '', 'file');
       cmd(t('ws.reveal'), () => window.blackj.project.reveal(), '', 'folderOpen');
     }
     cmd(t('nav.projects'), () => A.go('home'), '', 'folder');
+    cmd(t('home.openButton'), A.openDialog, '', 'folderOpen');
+    cmd(t('zip.open'), A.openZip, '', 'folderOpen');
     cmd(t('nav.learn'), () => A.go('learn'), '', 'book');
     cmd(t('nav.settings'), () => A.go('settings'), '', 'gear');
     cmd(s.settings.theme === 'dark' ? t('palette.light') : t('palette.dark'), () => A.updateSettings({ theme: s.settings.theme === 'dark' ? 'light' : 'dark' }), '', 'sun');

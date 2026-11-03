@@ -45,7 +45,7 @@ export function errorText(err) {
   if (!err) return '';
   if (err.kind === 'bench' || err.kind === 'app') {
     const key = 'err.' + err.code;
-    const s = t(key, err.params || {});
+    const s = t(key, { message: err.message || '', ...(err.params || {}) });
     if (s !== key) return s;
     return t('err.generic', { message: err.message || err.code });
   }
@@ -111,6 +111,26 @@ export async function removeRecent(dir) {
 }
 
 export const openDialog = () => handleOpen(api.project.openDialog());
+export const openZip = () => handleOpen(api.project.openZipDialog());
+
+export async function saveDiagramImage(rect) {
+  const s = getState();
+  if (!s.project) return null;
+  const r = await api.diagram.savePng({ rect, name: `${s.project.name} – ${t('diagram.title')}` });
+  if (r.ok) toast(t('diagram.imageSaved', { file: r.result.file }));
+  else if (r.error.code !== 'canceled') toast(errorText(r.error), 'bad');
+  return r.ok ? r.result : null;
+}
+
+/** Packs the project's sources (no compiled classes) into a .zip, e.g. to hand in homework. */
+export async function exportZip(file) {
+  if (!getState().project) return;
+  await saveAll();
+  const r = await api.project.exportZip(file ? { file } : {});
+  if (r.ok) toast(t('zip.done', { file: r.result.file, count: r.result.count }));
+  else if (r.error.code !== 'canceled') toast(errorText(r.error), 'bad');
+  return r.ok ? r.result : null;
+}
 export const openRecent = (dir) => handleOpen(api.project.open(dir));
 export const openExample = (name) => handleOpen(api.project.example(name));
 export const createProject = (name) => handleOpen(api.project.create(name));
@@ -462,6 +482,16 @@ export async function describe(cls) {
   return r.result;
 }
 
+/** BlueJ's "Use Library Class": constructors and methods of a Java library class such as Math or ArrayList. */
+export async function describeLibrary(name) {
+  const clean = String(name || '').trim().replace(/\s+/g, '');
+  if (!/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(clean)) return { error: t('lib.invalid') };
+  if (!(await ensureCompiled())) return { error: t('lib.needCompile') };
+  const r = await api.bench.describe({ className: clean });
+  if (!r.ok) return { error: r.error.code === 'classMissing' ? t('lib.notFound', { name: clean }) : errorText(r.error) };
+  return { desc: r.result };
+}
+
 function setException(err, label) {
   const frame = (err.frames || []).find((f) => f.project && f.line > 0);
   setState({ exception: { ...err, label, frame }, dock: 'problems' });
@@ -485,7 +515,9 @@ export function statementFor({ kind, cls, target, method, args, name }) {
   if (kind === 'new') return `${simple} ${name || '…'} = new ${simple}(${list});`;
   const call = `${method.static ? simple : target}.${method.name}(${list})`;
   const variable = getState().settings.lang === 'en' ? 'result' : 'ergebnis';
-  if (method.returnType && method.returnType !== 'void') return `${method.returnType} ${variable} = ${call};`;
+  // A type variable (E, T, K …) is declared as Object in the shown statement.
+  const ret = /^[A-Z]$/.test(method.returnType || '') ? 'Object' : method.returnType;
+  if (ret && ret !== 'void') return `${ret} ${variable} = ${call};`;
   return call + ';';
 }
 
@@ -756,9 +788,12 @@ export function buildContext() {
   return ctx;
 }
 
+/** AI features are on: a key is set and they are not switched off (e.g. for a class test). */
+export const aiOn = (s) => !!s.info.tutor.hasKey && !s.settings.aiOff;
+
 export async function askTutor(text) {
   const s = getState();
-  if (!text.trim() || s.chat.busy) return;
+  if (!text.trim() || s.chat.busy || s.settings.aiOff) return;
   setState({ tutorOpen: true, side: 'tutor' });
   const turnId = 't' + Date.now();
   const context = buildContext();
@@ -818,7 +853,7 @@ export async function aiEdit({ instruction, scope, selection }) {
   const s = getState();
   const name = s.activeTab;
   const f = s.files[name];
-  if (!f) return;
+  if (!f || s.settings.aiOff) return;
   if (!s.info.tutor.hasKey) {
     setState({ tutorOpen: true, side: 'tutor' });
     toast(t('tutor.err.noKey'), 'bad');

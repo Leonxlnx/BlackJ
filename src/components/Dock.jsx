@@ -39,6 +39,10 @@ export async function objectMenu(obj, x, y) {
       for (const m of list) items.push({ label: methodLabel(m), onClick: () => A.openDialogBox({ type: 'call', kind: m.static ? 'static' : 'method', cls: obj.className, target: obj.name, method: m }) });
     }
     items.push({ type: 'sep' });
+  } else if (obj.className && obj.value && obj.value.kind !== 'null' && obj.value.kind !== 'array') {
+    // A library object (String, ArrayList, Random …): its methods in a searchable list.
+    items.push({ label: t('menu.libMethods'), icon: 'play', onClick: () => A.openDialogBox({ type: 'library', target: obj.name, cls: obj.className, typeLabel: obj.type }) });
+    items.push({ type: 'sep' });
   }
   items.push({ label: t('menu.inspect'), icon: 'eye', onClick: () => A.showInspector(obj.name, obj.name) });
   items.push({ label: t('menu.remove'), icon: 'trash', onClick: () => A.removeObject(obj.name) });
@@ -164,7 +168,8 @@ function Problems() {
   const lang = useStore((s) => s.settings.lang);
   const compile = useStore((s) => s.compile);
   const exception = useStore((s) => s.exception);
-  const hasKey = useStore((s) => s.info.tutor.hasKey);
+  const hasKey = useStore((s) => A.aiOn(s));
+  const aiOff = useStore((s) => !!s.settings.aiOff);
   const problems = compile.state === 'errors' ? compile.problems : [];
   if (!problems.length && !exception) {
     return (
@@ -183,12 +188,14 @@ function Problems() {
               <span className="pill pill-neg">{exception.simpleType}</span>
               {ex.title}
             </div>
-            <div className="problem-actions">
-              <button className="btn btn-sm btn-quiet" onClick={() => A.askTutor(translate(lang, 'tutor.prompt.explainException', { type: exception.simpleType, message: exception.message ? ': ' + exception.message : '' }))}>
-                <Icon name="tutor" />
-                {t('problems.ask')}
-              </button>
-            </div>
+            {!aiOff && (
+              <div className="problem-actions">
+                <button className="btn btn-sm btn-quiet" onClick={() => A.askTutor(translate(lang, 'tutor.prompt.explainException', { type: exception.simpleType, message: exception.message ? ': ' + exception.message : '' }))}>
+                  <Icon name="tutor" />
+                  {t('problems.ask')}
+                </button>
+              </div>
+            )}
             {exception.message && <p className="mono" style={{ color: 'var(--text)' }}>{exception.message}</p>}
             <p>{ex.explain} <span className="fix">{ex.fix}</span></p>
             <div className="frames">
@@ -218,10 +225,12 @@ function Problems() {
                   {t('ai.fix')}
                 </button>
               )}
-              <button className="btn btn-sm btn-quiet" onClick={() => A.askTutor(translate(lang, 'tutor.prompt.explainProblem', { file: p.file, line: p.line, message: p.message }))}>
-                <Icon name="tutor" />
-                {t('problems.ask')}
-              </button>
+              {!aiOff && (
+                <button className="btn btn-sm btn-quiet" onClick={() => A.askTutor(translate(lang, 'tutor.prompt.explainProblem', { file: p.file, line: p.line, message: p.message }))}>
+                  <Icon name="tutor" />
+                  {t('problems.ask')}
+                </button>
+              )}
             </div>
             <div>
               <button className="problem-where" onClick={() => A.openFile(p.file, p.line)}>
@@ -278,6 +287,12 @@ export default function Dock() {
             <button className="btn btn-sm" onClick={() => A.stopRecording(true)}>{t('record.stop')}</button>
             <button className="btn btn-sm btn-quiet" onClick={() => A.stopRecording(false)}>{t('common.cancel')}</button>
           </>
+        )}
+        {!recording && dock === 'objects' && (
+          <button className="btn btn-sm btn-quiet" onClick={() => A.openDialogBox({ type: 'library' })} title={t('lib.text')}>
+            <Icon name="book" />
+            {t('lib.short')}
+          </button>
         )}
         {!recording && dock === 'objects' && objects.length > 0 && (
           <button className="btn btn-sm btn-quiet" onClick={A.stopProgram}>

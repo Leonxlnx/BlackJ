@@ -51,15 +51,18 @@ function Splitter({ vertical, onDrag }) {
 
 function SidePanel() {
   const t = useT();
-  const side = useStore((s) => s.side);
+  const aiOff = useStore((s) => !!s.settings.aiOff);
+  const side = useStore((s) => (s.settings.aiOff ? 'inspect' : s.side));
   const inspect = useStore((s) => s.inspect);
   return (
-    <section className="panel side" aria-label={t('tutor.title')}>
+    <section className="panel side" aria-label={aiOff ? t('inspect.panel') : t('tutor.title')}>
       <div className="panel-head">
         <div className="tabs" role="tablist">
-          <button className="tab" role="tab" aria-selected={side !== 'inspect'} onClick={() => setState({ side: 'tutor' })}>
-            <span className="tab-label">{t('tutor.title')}</span>
-          </button>
+          {!aiOff && (
+            <button className="tab" role="tab" aria-selected={side !== 'inspect'} onClick={() => setState({ side: 'tutor' })}>
+              <span className="tab-label">{t('tutor.title')}</span>
+            </button>
+          )}
           <button className="tab" role="tab" aria-selected={side === 'inspect'} onClick={() => setState({ side: 'inspect' })}>
             <span className="tab-label">{t('inspect.panel')}</span>
             {inspect && <span className="count">{inspect.trail[0]}</span>}

@@ -67,6 +67,7 @@ export default function Menu() {
           >
             {it.icon && <Icon name={it.icon} width="14" height="14" />}
             {it.label}
+            {it.hint && <span className="menu-hint">{it.hint}</span>}
           </button>
         );
       })}

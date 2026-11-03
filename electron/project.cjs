@@ -169,11 +169,59 @@ function savePositions(dir, positions) {
 /** Copies an example into a fresh folder so the original stays untouched. */
 function copyExample(src, targetParent) {
   fs.mkdirSync(targetParent, { recursive: true });
-  const base = path.basename(src);
-  let target = path.join(targetParent, base);
-  for (let i = 2; fs.existsSync(target); i++) target = path.join(targetParent, `${base} ${i}`);
+  const target = freeDir(targetParent, path.basename(src));
   fs.cpSync(src, target, { recursive: true });
   return target;
+}
+
+/** A free folder name below parent: "Name", "Name 2", ... */
+function freeDir(parent, base) {
+  let target = path.join(parent, base);
+  for (let i = 2; fs.existsSync(target); i++) target = path.join(parent, `${base} ${i}`);
+  return target;
+}
+
+/** The project folder inside an unpacked archive: the shallowest folder with package.bluej or .java files. */
+function projectRoot(dir) {
+  let level = [dir];
+  for (let depth = 0; depth < 4 && level.length; depth++) {
+    const withJava = [];
+    const next = [];
+    for (const d of level) {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(d, { withFileTypes: true });
+      } catch { /* unreadable */ }
+      if (entries.some((e) => e.isFile() && e.name === 'package.bluej')) return d;
+      if (entries.some((e) => e.isFile() && e.name.endsWith('.java'))) withJava.push(d);
+      for (const e of entries) if (e.isDirectory() && !e.name.startsWith('.') && e.name !== '__MACOSX') next.push(path.join(d, e.name));
+    }
+    if (withJava.length) return withJava[0];
+    level = next;
+  }
+  return dir;
+}
+
+const ARCHIVE_SKIP = new Set(['.git', '.svn', 'node_modules', 'out', 'target', '__MACOSX']);
+
+/** Files that belong in a project archive: sources, BlueJ files, libraries and notes, no compiled classes. */
+function archiveFiles(dir, rel = '', depth = 0, out = []) {
+  if (depth > 10) return out;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(path.join(dir, rel), { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    const r = rel ? rel + '/' + e.name : e.name;
+    if (e.isDirectory()) {
+      if (!ARCHIVE_SKIP.has(e.name)) archiveFiles(dir, r, depth + 1, out);
+    } else if (e.isFile() && !/\.(class|ctxt)$/i.test(e.name) && !/^(\.DS_Store|Thumbs\.db|bluej\.pkh)$/i.test(e.name)) {
+      out.push(r);
+    }
+  }
+  return out;
 }
 
 function createProject(parent, name) {
@@ -185,4 +233,4 @@ function createProject(parent, name) {
   return dir;
 }
 
-module.exports = { open, writeFile, renameFile, createClass, createPackage, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, IDENT };
+module.exports = { open, writeFile, renameFile, createClass, createPackage, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, freeDir, projectRoot, archiveFiles, IDENT };

@@ -46,7 +46,7 @@ function registerProviders() {
   monaco.languages.registerInlineCompletionsProvider('java', {
     async provideInlineCompletions(model, position, _context, token) {
       const s = getState();
-      if (!s.settings.aiInline || !s.info.tutor.hasKey || !s.project || s.project.readOnly) return { items: [] };
+      if (!s.settings.aiInline || !A.aiOn(s) || !s.project || s.project.readOnly) return { items: [] };
       await sleep(450);
       if (token.isCancellationRequested) return { items: [] };
       const line = model.getLineContent(position.lineNumber);
@@ -67,7 +67,7 @@ function registerProviders() {
   monaco.languages.registerCodeActionProvider('java', {
     provideCodeActions(model, _range, context) {
       const s = getState();
-      if (!s.info.tutor.hasKey || s.compile.state !== 'errors') return { actions: [], dispose() {} };
+      if (!A.aiOn(s) || s.compile.state !== 'errors') return { actions: [], dispose() {} };
       const name = s.activeTab;
       const problems = context.markers.filter((m) => m.owner === 'javac' || m.source === 'BlackJ').map((m) => s.compile.problems.find((p) => p.file === name && p.line === m.startLineNumber)).filter(Boolean);
       const actions = problems.slice(0, 1).map((p) => ({
@@ -219,7 +219,7 @@ export default function EditorPanel() {
   const paused = useStore((s) => s.debug && s.debug.paused);
   const mode = useStore((s) => s.editorMode || 'source');
   const cursor = useStore((s) => s.cursor);
-  const hasKey = useStore((s) => s.info.tutor.hasKey);
+  const hasKey = useStore((s) => A.aiOn(s));
   const hostRef = useRef(null);
   const editorRef = useRef(null);
   const applying = useRef(false);
@@ -254,6 +254,7 @@ export default function EditorPanel() {
       hideCursorInOverviewRuler: true,
       inlineSuggest: { enabled: true, mode: 'subwordSmart' },
       lightbulb: { enabled: 'on' },
+      contextmenu: false,
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
       'semanticHighlighting.enabled': false,
     });
@@ -264,7 +265,9 @@ export default function EditorPanel() {
       if (name) A.saveFile(name);
     });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, () => A.compile());
-    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => setState({ aiPrompt: { at: Date.now() } }));
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyI, () => {
+      if (!getState().settings.aiOff) setState({ aiPrompt: { at: Date.now() } });
+    });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP, () => A.openPalette());
     ed.addCommand(monaco.KeyCode.F5, () => {
       const s = getState();
@@ -282,6 +285,48 @@ export default function EditorPanel() {
       if (e.target.type !== T.GUTTER_GLYPH_MARGIN && e.target.type !== T.GUTTER_LINE_DECORATIONS) return;
       const name = getState().activeTab;
       if (name && name !== '#readme' && e.target.position) A.toggleBreakpoint(name, e.target.position.lineNumber);
+    });
+    // The app's own right-click menu (Monaco's built-in one is English only).
+    ed.onContextMenu((e) => {
+      const s = getState();
+      const tr = (k, p) => translate(s.settings.lang, k, p);
+      if (!ed.getModel() || !s.project) return;
+      let sel = ed.getSelection();
+      if (e.target.position && (!sel || !sel.containsPosition(e.target.position))) {
+        ed.setPosition(e.target.position);
+        sel = ed.getSelection();
+      }
+      const hasSel = !!sel && !sel.isEmpty();
+      const name = s.activeTab;
+      const isCode = !!name && name !== '#readme';
+      const ro = s.project.readOnly || (s.editorMode || 'source') !== 'source';
+      const line = (e.target.position || ed.getPosition()).lineNumber;
+      const hasBp = isCode && (s.breakpoints[name] || []).includes(line);
+      const run = (id) => () => {
+        ed.focus();
+        const action = ed.getAction(id);
+        if (action) action.run();
+      };
+      const exec = (cmd) => () => {
+        ed.focus();
+        document.execCommand(cmd);
+      };
+      const items = [
+        { label: tr('edit.cut'), hint: 'Strg+X', disabled: !hasSel || ro, onClick: exec('cut') },
+        { label: tr('edit.copy'), hint: 'Strg+C', disabled: !hasSel, onClick: exec('copy') },
+        { label: tr('edit.paste'), hint: 'Strg+V', disabled: ro, onClick: exec('paste') },
+      ];
+      if (A.aiOn(s)) {
+        items.push({ type: 'sep' });
+        if (hasSel) items.push({ label: tr('edit.explain'), icon: 'tutor', onClick: () => A.askTutor(tr('tutor.prompt.explainSelection')) });
+        if (!ro) items.push({ label: tr('ai.write'), icon: 'spark', hint: 'Strg+I', onClick: () => setState({ aiPrompt: { at: Date.now() } }) });
+      }
+      items.push({ type: 'sep' });
+      if (isCode) items.push({ label: tr(hasBp ? 'edit.bpRemove' : 'edit.bpAdd', { line }), hint: 'F9', onClick: () => A.toggleBreakpoint(name, line) });
+      items.push({ label: tr('shortcuts.comment'), hint: 'Strg+#', disabled: ro, onClick: run('editor.action.commentLine') });
+      items.push({ label: tr('editor.format'), hint: 'Umschalt+Alt+F', disabled: ro || !isCode, onClick: run('editor.action.formatDocument') });
+      items.push({ label: tr('shortcuts.find'), hint: 'Strg+H', onClick: run('editor.action.startFindReplaceAction') });
+      A.openMenu({ x: e.event.posx, y: e.event.posy, items });
     });
     ed.onDidChangeModelContent(() => {
       if (applying.current) return;
@@ -476,18 +521,22 @@ export default function EditorPanel() {
             <button className="icon-btn" title={t('editor.format') + ' (Umschalt+Alt+F)'} aria-label={t('editor.format')} onClick={format} disabled={project.readOnly || mode !== 'source'}>
               <Icon name="indent" />
             </button>
-            <button className="btn btn-sm btn-quiet ai-btn" title={t('ai.write') + ' (Strg+I)'} onClick={() => setState({ aiPrompt: { at: Date.now() } })} disabled={project.readOnly || !hasKey || mode !== 'source'}>
-              <Icon name="spark" />
-              <span className="wide-only">{t('ai.writeShort')}</span>
-            </button>
-            <button
-              className="btn btn-sm btn-quiet"
-              title={hasSelection ? t('editor.explain') : t('editor.explainFile')}
-              onClick={() => A.askTutor(hasSelection ? translate(settings.lang, 'tutor.prompt.explainSelection') : translate(settings.lang, 'tutor.prompt.explainFile', { file: A.simpleName(file.className) + '.java' }))}
-            >
-              <Icon name="tutor" />
-              <span className="wide-only">{hasSelection ? t('editor.explain') : t('editor.explainShort')}</span>
-            </button>
+            {!settings.aiOff && (
+              <>
+                <button className="btn btn-sm btn-quiet ai-btn" title={t('ai.write') + ' (Strg+I)'} onClick={() => setState({ aiPrompt: { at: Date.now() } })} disabled={project.readOnly || !hasKey || mode !== 'source'}>
+                  <Icon name="spark" />
+                  <span className="wide-only">{t('ai.writeShort')}</span>
+                </button>
+                <button
+                  className="btn btn-sm btn-quiet"
+                  title={hasSelection ? t('editor.explain') : t('editor.explainFile')}
+                  onClick={() => A.askTutor(hasSelection ? translate(settings.lang, 'tutor.prompt.explainSelection') : translate(settings.lang, 'tutor.prompt.explainFile', { file: A.simpleName(file.className) + '.java' }))}
+                >
+                  <Icon name="tutor" />
+                  <span className="wide-only">{hasSelection ? t('editor.explain') : t('editor.explainShort')}</span>
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>

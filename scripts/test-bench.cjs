@@ -208,6 +208,44 @@ async function check(name, fn) {
     await bench.start({ jdk, benchDir: path.join(root, 'resources', 'bench'), classDir: outDir, cwd: project });
   });
 
+  await check('library classes: Math, StringBuilder, ArrayList, objects of hidden classes', async () => {
+    const math = await bench.request('describe', { className: 'Math' });
+    assert.strictEqual(math.name, 'java.lang.Math');
+    assert.strictEqual(math.library, true);
+    assert.strictEqual(math.constructors.length, 0);
+    const max = math.methods.find((m) => m.key === 'max(int,int)');
+    assert.ok(max && max.static, 'Math.max(int,int)');
+    const r = await bench.request('call', { className: 'java.lang.Math', key: 'max(int,int)', args: [{ kind: 'text', text: '3' }, { kind: 'text', text: '7' }] });
+    assert.strictEqual(r.value.text, '7');
+    const sb = await bench.request('describe', { className: 'StringBuilder' });
+    assert.ok(sb.constructors.some((c) => c.key === '<init>(java.lang.String)'));
+    assert.ok(sb.methods.some((m) => m.key === 'length()'), 'length() through the visibility bridge');
+    assert.ok(!sb.methods.some((m) => m.name === 'wait' || m.name === 'getClass'));
+    await bench.request('new', { className: 'java.lang.StringBuilder', key: '<init>(java.lang.String)', args: [{ kind: 'text', text: 'abc' }], name: 'sb' });
+    await bench.request('call', { target: 'sb', key: 'reverse()', args: [] });
+    const len = await bench.request('call', { target: 'sb', key: 'length()', args: [] });
+    assert.strictEqual(len.value.text, '3');
+    const text = await bench.request('call', { target: 'sb', key: 'toString()', args: [] });
+    assert.strictEqual(text.value.text, 'cba');
+    await bench.request('new', { className: 'java.util.ArrayList', key: '<init>()', args: [], name: 'liste' });
+    await bench.request('call', { target: 'liste', key: 'add(java.lang.Object)', args: [{ kind: 'ref', name: 'sb' }] });
+    const size = await bench.request('call', { target: 'liste', key: 'size()', args: [] });
+    assert.strictEqual(size.value.text, '1');
+    // Collections.emptyList() is a private class inside java.util: called through the List interface.
+    const empty = await bench.request('call', { className: 'java.util.Collections', key: 'emptyList()', args: [] });
+    await bench.request('store', { ref: empty.value.handle, name: 'leer2' });
+    const desc = await bench.request('describe', { className: 'java.util.Collections$EmptyList' });
+    assert.ok(desc.methods.some((m) => m.key === 'size()'));
+    const zero = await bench.request('call', { target: 'leer2', key: 'size()', args: [] });
+    assert.strictEqual(zero.value.text, '0');
+    try {
+      await bench.request('describe', { className: 'GibtsNicht' });
+      assert.fail('should throw');
+    } catch (err) {
+      assert.strictEqual(err.bench.code, 'classMissing');
+    }
+  });
+
   await check('main reads System.in', async () => {
     out.length = 0;
     const run = bench.request('main', { className: 'Zoo' });

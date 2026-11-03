@@ -5,7 +5,7 @@ import Icon from './Icon.jsx';
 const GROUPS = [
   ['shortcuts.general', [['Strg P', 'shortcuts.palette'], ['Strg Umschalt P', 'shortcuts.commands'], ['F1', 'shortcuts.help'], ['Strg Umschalt L', 'shortcuts.side']]],
   ['shortcuts.project', [['Strg K', 'ws.compile'], ['F5', 'ws.runMain'], ['Strg N', 'ws.newClass'], ['Strg S', 'editor.save']]],
-  ['shortcuts.editor', [['Strg I', 'ai.write'], ['Tab', 'shortcuts.acceptAi'], ['Strg Leertaste', 'shortcuts.suggest'], ['Umschalt Alt F', 'editor.format'], ['Strg F', 'shortcuts.find'], ['Strg /', 'shortcuts.comment']]],
+  ['shortcuts.editor', [['Strg I', 'ai.write'], ['Tab', 'shortcuts.acceptAi'], ['Strg Leertaste', 'shortcuts.suggest'], ['Umschalt Alt F', 'editor.format'], ['Strg F', 'shortcuts.find'], ['Strg #', 'shortcuts.comment']]],
   ['shortcuts.debug', [['F9', 'debug.breakpoint'], ['F8', 'debug.continue'], ['F10', 'debug.over'], ['F11', 'debug.into'], ['Umschalt F11', 'debug.out']]],
 ];
 
