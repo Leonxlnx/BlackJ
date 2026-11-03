@@ -23,7 +23,7 @@
 </tr>
 <tr>
 <td><img src="docs/screenshots/light.png" alt="Helles Design"><br><sub>Helles und dunkles Design</sub></td>
-<td><img src="docs/screenshots/home.png" alt="Startseite"><br><sub>Startseite mit zuletzt geöffneten Projekten</sub></td>
+<td><img src="docs/screenshots/completion.png" alt="Autovervollständigung für String"><br><sub>Vervollständigung passend zum Typ, auch für String, Scanner, ArrayList</sub></td>
 </tr>
 </table>
 
