@@ -1,0 +1,89 @@
+import { useMemo } from 'react';
+import { useStore } from '../store.js';
+import { useT } from '../i18n.js';
+import * as A from '../actions.js';
+import Icon, { Mark } from './Icon.jsx';
+
+/** The window's own title bar: where you are, search, and the actions you use most. */
+export default function TitleBar() {
+  const t = useT();
+  const view = useStore((s) => s.view);
+  const project = useStore((s) => s.project);
+  const pkg = useStore((s) => s.pkg);
+  const files = useStore((s) => s.files);
+  const compileState = useStore((s) => s.compile.state);
+  const benchState = useStore((s) => s.bench.state);
+  const selected = useStore((s) => s.selectedClass);
+  const activeTab = useStore((s) => s.activeTab);
+  const paused = useStore((s) => s.debug && s.debug.paused);
+  const model = useMemo(() => (project ? A.modelOf(files) : null), [files, project]);
+  const mains = model ? model.list.filter((c) => c.hasMain) : [];
+  const running = benchState === 'running' || benchState === 'waiting';
+  const inProject = view === 'project' && project;
+  const mainTarget = mains.find((c) => c.fileClass === selected) || mains.find((c) => c.file === activeTab) || mains[0];
+  const viewTitle = { home: t('nav.projects'), learn: t('nav.learn'), settings: t('nav.settings') }[view];
+
+  return (
+    <header className="titlebar">
+      <div className="tb-left">
+        <Mark className="tb-mark" />
+        {inProject ? (
+          <nav className="crumbs-bar" aria-label="Pfad">
+            <h1 className="tb-title">
+              <button className="crumb" onClick={() => A.enterPackage('')}>{project.name}</button>
+            </h1>
+            {pkg && pkg.split('.').map((part, i, all) => (
+              <span key={i} className="crumb-wrap">
+                <span className="crumb-sep" aria-hidden="true">/</span>
+                <button className="crumb" onClick={() => A.enterPackage(all.slice(0, i + 1).join('.'))}>{part}</button>
+              </span>
+            ))}
+          </nav>
+        ) : (
+          <h1 className="tb-title">{viewTitle || 'BlackJ'}</h1>
+        )}
+      </div>
+
+      <button className="tb-search" onClick={() => A.openPalette()} aria-label={t('palette.placeholder')}>
+        <Icon name="search" />
+        <span>{inProject ? t('palette.placeholder') : t('palette.placeholderHome')}</span>
+        <kbd>Strg P</kbd>
+      </button>
+
+      <div className="tb-right">
+        {inProject && (
+          <>
+            {running || paused ? (
+              <button className="btn btn-sm" onClick={A.stopProgram}>
+                <Icon name="stop" />
+                {t('ws.stop')}
+              </button>
+            ) : (
+              mains.length > 0 && (
+                <button
+                  className="btn btn-sm"
+                  title={mainTarget ? `${mainTarget.simple}.main(String[] args) · F5` : ''}
+                  onClick={(e) => {
+                    if (mains.length === 1) A.runMain(mains[0].fileClass);
+                    else {
+                      const r = e.currentTarget.getBoundingClientRect();
+                      A.openMenu({ x: r.left, y: r.bottom + 6, items: mains.map((c) => ({ label: <span className="sig">{c.simple}.main()</span>, onClick: () => A.runMain(c.fileClass) })) });
+                    }
+                  }}
+                >
+                  <Icon name="play" />
+                  {t('ws.runMain')}
+                  {mains.length > 1 && <Icon name="chevron" />}
+                </button>
+              )
+            )}
+            <button className="btn btn-sm btn-primary" onClick={A.compile} disabled={compileState === 'compiling'} title="Strg+K">
+              <Icon name="build" />
+              {compileState === 'compiling' ? t('ws.compiling') : t('ws.compile')}
+            </button>
+          </>
+        )}
+      </div>
+    </header>
+  );
+}

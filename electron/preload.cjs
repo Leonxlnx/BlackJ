@@ -1,0 +1,80 @@
+// The only bridge between the window and the main process.
+const { contextBridge, ipcRenderer } = require('electron');
+
+const invoke = (channel) => (payload) => ipcRenderer.invoke(channel, payload);
+const listen = (channel) => (cb) => {
+  const fn = (_e, data) => cb(data);
+  ipcRenderer.on(channel, fn);
+  return () => ipcRenderer.off(channel, fn);
+};
+
+contextBridge.exposeInMainWorld('blackj', {
+  init: invoke('app:init'),
+  setSettings: invoke('settings:set'),
+  chooseJdk: invoke('jdk:choose'),
+  autoJdk: invoke('jdk:auto'),
+  project: {
+    openDialog: invoke('project:openDialog'),
+    open: invoke('project:open'),
+    example: invoke('project:example'),
+    create: invoke('project:create'),
+    write: invoke('project:write'),
+    createClass: invoke('project:createClass'),
+    deleteClass: invoke('project:deleteClass'),
+    positions: invoke('project:positions'),
+    reveal: invoke('project:reveal'),
+    createPackage: invoke('project:createPackage'),
+    exportJar: invoke('project:exportJar'),
+  },
+  compile: invoke('compile'),
+  bench: {
+    describe: invoke('bench:describe'),
+    create: invoke('bench:new'),
+    call: invoke('bench:call'),
+    main: invoke('bench:main'),
+    inspect: invoke('bench:inspect'),
+    store: invoke('bench:store'),
+    remove: invoke('bench:remove'),
+    list: invoke('bench:list'),
+    stdin: invoke('bench:stdin'),
+    pad: invoke('bench:pad'),
+    padReset: invoke('bench:padReset'),
+    inspectClass: invoke('bench:inspectClass'),
+    reset: invoke('bench:reset'),
+    onOut: listen('bench:out'),
+    onState: listen('bench:state'),
+  },
+  ai: {
+    status: invoke('ai:status'),
+    setKey: invoke('ai:setKey'),
+    forgetKey: invoke('ai:forgetKey'),
+    newChat: invoke('ai:newChat'),
+    send: invoke('ai:send'),
+    stop: invoke('ai:stop'),
+    complete: invoke('ai:complete'),
+    edit: invoke('ai:edit'),
+    onEvent: listen('ai:event'),
+  },
+  windowTheme: invoke('window:theme'),
+  tests: {
+    run: invoke('tests:run'),
+  },
+  debug: {
+    setBreakpoints: invoke('debug:setBreakpoints'),
+    resume: invoke('debug:resume'),
+    stepOver: invoke('debug:stepOver'),
+    stepInto: invoke('debug:stepInto'),
+    stepOut: invoke('debug:stepOut'),
+    pause: invoke('debug:pause'),
+    variables: invoke('debug:variables'),
+    expand: invoke('debug:expand'),
+    detach: invoke('debug:detach'),
+    onEvent: listen('debug:event'),
+  },
+  openExternal: invoke('shell:open'),
+  smoke: {
+    capture: invoke('smoke:capture'),
+    log: invoke('smoke:log'),
+    done: invoke('smoke:done'),
+  },
+});

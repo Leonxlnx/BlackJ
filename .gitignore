@@ -1,0 +1,14 @@
+node_modules/
+dist/
+release/
+.smoke/
+.taste-skill/
+resources/bench/
+BlackJ.exe
+App/
+BlackJ-Daten/
+Projekte/
+.cache/
+resources/junit/*.jar
+.claude/
+release/
