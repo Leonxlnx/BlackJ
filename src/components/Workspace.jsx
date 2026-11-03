@@ -119,16 +119,16 @@ export default function Workspace() {
     if (drawer) setState({ tutorOpen: false });
   }, [drawer]);
   const sideW = Math.min(tutorW, Math.round(size.w * (drawer ? 0.6 : 0.32)));
-  const mainW = size.w - (tutorOpen && !drawer ? sideW + 12 : 0);
-  const dW = Math.max(240, Math.min(diagramW, Math.round(mainW * 0.45), mainW - 12 - 400));
+  const mainW = size.w - (tutorOpen && !drawer ? sideW + 8 : 0);
+  const dW = Math.max(240, Math.min(diagramW, Math.round(mainW * 0.45), mainW - 8 - 400));
   const dH = dockCollapsed ? 44 : Math.max(140, Math.min(dockH, Math.round(size.h * 0.36)));
 
   return (
     <div className="ws">
       {project.readOnly && <div className="ws-banner">{t('ws.readOnly')}</div>}
-      <div className="ws-body" ref={bodyRef} style={{ gridTemplateColumns: tutorOpen && !drawer ? `minmax(0,1fr) 12px ${sideW}px` : 'minmax(0,1fr)' }}>
-        <div className="ws-cols" style={{ gridTemplateRows: `minmax(0,1fr) 12px ${dH}px` }}>
-          <div className="ws-cols" style={{ gridTemplateColumns: `${dW}px 12px minmax(0,1fr)` }}>
+      <div className="ws-body" ref={bodyRef} style={{ gridTemplateColumns: tutorOpen && !drawer ? `minmax(0,1fr) 8px ${sideW}px` : 'minmax(0,1fr)' }}>
+        <div className="ws-cols" style={{ gridTemplateRows: `minmax(0,1fr) 8px ${dH}px` }}>
+          <div className="ws-cols" style={{ gridTemplateColumns: `${dW}px 8px minmax(0,1fr)` }}>
             <Diagram model={model} />
             <Splitter onDrag={(dx) => setDiagramW(() => Math.max(240, dW + dx))} />
             <EditorPanel model={model} />

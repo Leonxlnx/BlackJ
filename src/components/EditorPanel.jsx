@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore, getState, setState } from '../store.js';
-import { useT, translate } from '../i18n.js';
+import { useT, translate, formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
 import { api } from '../api.js';
 import monaco, { defineThemes } from '../lib/monaco.js';
@@ -289,7 +289,7 @@ function AiPrompt({ editorRef }) {
   };
   return (
     <form className="ai-prompt" style={{ top }} onSubmit={submit}>
-      <Icon name="spark" />
+      <Icon name="tutor" />
       {busy ? (
         <span className="ai-busy">{t('ai.working')} <span className="muted">„{busy.instruction}“</span></span>
       ) : (
@@ -412,20 +412,20 @@ export default function EditorPanel() {
         document.execCommand(cmd);
       };
       const items = [
-        { label: tr('edit.cut'), hint: 'Strg+X', disabled: !hasSel || ro, onClick: exec('cut') },
-        { label: tr('edit.copy'), hint: 'Strg+C', disabled: !hasSel, onClick: exec('copy') },
-        { label: tr('edit.paste'), hint: 'Strg+V', disabled: ro, onClick: exec('paste') },
+        { label: tr('edit.cut'), keys: 'ctrl X', disabled: !hasSel || ro, onClick: exec('cut') },
+        { label: tr('edit.copy'), keys: 'ctrl C', disabled: !hasSel, onClick: exec('copy') },
+        { label: tr('edit.paste'), keys: 'ctrl V', disabled: ro, onClick: exec('paste') },
       ];
       if (A.aiOn(s)) {
         items.push({ type: 'sep' });
         if (hasSel) items.push({ label: tr('edit.explain'), icon: 'tutor', onClick: () => A.askTutor(tr('tutor.prompt.explainSelection')) });
-        if (!ro) items.push({ label: tr('ai.write'), icon: 'spark', hint: 'Strg+I', onClick: () => setState({ aiPrompt: { at: Date.now() } }) });
+        if (!ro) items.push({ label: tr('ai.write'), icon: 'pencil', keys: 'ctrl I', onClick: () => setState({ aiPrompt: { at: Date.now() } }) });
       }
       items.push({ type: 'sep' });
-      if (isCode) items.push({ label: tr(hasBp ? 'edit.bpRemove' : 'edit.bpAdd', { line }), hint: 'F9', onClick: () => A.toggleBreakpoint(name, line) });
-      items.push({ label: tr('shortcuts.comment'), hint: 'Strg+#', disabled: ro, onClick: run('editor.action.commentLine') });
-      items.push({ label: tr('editor.format'), hint: 'Umschalt+Alt+F', disabled: ro || !isCode, onClick: run('editor.action.formatDocument') });
-      items.push({ label: tr('shortcuts.find'), hint: 'Strg+H', onClick: run('editor.action.startFindReplaceAction') });
+      if (isCode) items.push({ label: tr(hasBp ? 'edit.bpRemove' : 'edit.bpAdd', { line }), keys: 'F9', onClick: () => A.toggleBreakpoint(name, line) });
+      items.push({ label: tr('shortcuts.comment'), keys: 'ctrl #', disabled: ro, onClick: run('editor.action.commentLine') });
+      items.push({ label: tr('editor.format'), keys: 'shift Alt F', disabled: ro || !isCode, onClick: run('editor.action.formatDocument') });
+      items.push({ label: tr('shortcuts.find'), keys: 'ctrl H', onClick: run('editor.action.startFindReplaceAction') });
       A.openMenu({ x: e.event.posx, y: e.event.posy, items });
     });
     ed.onDidChangeModelContent(() => {
@@ -501,9 +501,12 @@ export default function EditorPanel() {
   useEffect(() => {
     if (!decos.current.bp) return;
     const lines = (active && breakpoints && breakpoints[active]) || [];
-    decos.current.bp.set(lines.map((l) => ({ range: new monaco.Range(l, 1, l, 1), options: { glyphMarginClassName: 'bp-glyph', glyphMarginHoverMessage: { value: t('debug.breakpoint') } } })));
     const f = paused && paused.frames && paused.frames[paused.frame || 0];
-    if (f && active === A.fileOfClass(f.className)) {
+    const here = f && active === A.fileOfClass(f.className);
+    // On the paused line only the current-frame bar shows; the breakpoint dot would collide with it.
+    const dots = here ? lines.filter((l) => l !== f.line) : lines;
+    decos.current.bp.set(dots.map((l) => ({ range: new monaco.Range(l, 1, l, 1), options: { glyphMarginClassName: 'bp-glyph', glyphMarginHoverMessage: { value: t('debug.breakpointHover') } } })));
+    if (here) {
       decos.current.dbg.set([{ range: new monaco.Range(f.line, 1, f.line, 1), options: { isWholeLine: true, className: 'dbg-line', glyphMarginClassName: 'dbg-glyph' } }]);
     } else decos.current.dbg.clear();
   }, [active, breakpoints, paused]);
@@ -561,6 +564,64 @@ export default function EditorPanel() {
     ed.focus();
   }, [insertRequest]);
 
+  // Keep the active file tab in view when the strip scrolls.
+  const tabsRef = useRef(null);
+  // The strip fades only on a side where tabs are hidden.
+  const updateFade = () => {
+    const el = tabsRef.current;
+    if (!el) return;
+    el.classList.toggle('fade-l', el.scrollLeft > 1);
+    el.classList.toggle('fade-r', el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  };
+  // Scrolls just far enough to show the active tab, then lands on a tab boundary: the first tab
+  // that is at least half visible starts at the strip's left edge, in line with the breadcrumb.
+  const alignTabs = () => {
+    const strip = tabsRef.current;
+    if (!strip) return;
+    strip.style.paddingRight = '';
+    const items = [...strip.querySelectorAll('.tab')];
+    const el = strip.querySelector('.tab[aria-selected="true"]');
+    if (el && items.length) {
+      const sr = strip.getBoundingClientRect();
+      const at = (t) => {
+        const r = t.getBoundingClientRect();
+        return { l: r.left - sr.left + strip.scrollLeft, r: r.right - sr.left + strip.scrollLeft };
+      };
+      const spans = items.map(at);
+      const a = at(el);
+      const w = strip.clientWidth;
+      let left = strip.scrollLeft;
+      if (a.l < left) left = a.l;
+      else if (a.r > left + w) left = a.r - w;
+      const half = spans.find((p) => p.r - Math.max(p.l, left) >= (p.r - p.l) / 2);
+      const next = spans.find((p) => p.l >= left - 0.5);
+      let snap = half ? half.l : left;
+      if (a.r > snap + w + 0.5 && next) snap = next.l;
+      snap = Math.max(0, Math.round(snap - spans[0].l));
+      const room = snap + w - strip.scrollWidth;
+      if (room > 0) strip.style.paddingRight = room + 'px';
+      strip.scrollLeft = snap;
+    }
+    updateFade();
+  };
+  const alignTabsRef = useRef(alignTabs);
+  alignTabsRef.current = alignTabs;
+  useEffect(() => {
+    alignTabs();
+  }, [active, tabs]);
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (!el) return undefined;
+    let lastW = -1;
+    const ro = new ResizeObserver(() => {
+      if (el.offsetWidth === lastW) return;
+      lastW = el.offsetWidth;
+      alignTabsRef.current();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const file = active && fileOf(active);
   const isJava = file && active !== '#readme';
   const info = isJava ? infoFor(files[active]) : null;
@@ -574,7 +635,7 @@ export default function EditorPanel() {
   return (
     <section className="panel editor-panel" aria-label="Editor">
       <div className="panel-head">
-        <div className="tabs" role="tablist">
+        <div className="tabs" role="tablist" ref={tabsRef} onScroll={updateFade}>
           {tabs.map((name) => {
             const f = fileOf(name);
             if (!f) return null;
@@ -619,15 +680,17 @@ export default function EditorPanel() {
               <button aria-pressed={mode === 'source'} onClick={() => setState({ editorMode: 'source' })}>{t('editor.source')}</button>
               <button aria-pressed={mode === 'docs'} onClick={() => setState({ editorMode: 'docs' })}>{t('editor.docs')}</button>
             </div>
-            <button className="icon-btn" title={t('editor.format') + ' (Umschalt+Alt+F)'} aria-label={t('editor.format')} onClick={format} disabled={project.readOnly || mode !== 'source'}>
+            <button className="icon-btn" title={t('editor.format') + ' (' + formatKeys(settings.lang, 'shift Alt F', '+') + ')'} aria-label={t('editor.format')} onClick={format} disabled={project.readOnly || mode !== 'source'}>
               <Icon name="indent" />
             </button>
             {!settings.aiOff && (
               <>
-                <button className="btn btn-sm btn-quiet ai-btn" title={t('ai.write') + ' (Strg+I)'} onClick={() => setState({ aiPrompt: { at: Date.now() } })} disabled={project.readOnly || !hasKey || mode !== 'source'}>
-                  <Icon name="spark" />
+                {hasKey && (
+                <button className="btn btn-sm btn-quiet ai-btn" title={t('ai.write') + ' (' + formatKeys(settings.lang, 'ctrl I', '+') + ')'} onClick={() => setState({ aiPrompt: { at: Date.now() } })} disabled={project.readOnly || mode !== 'source'}>
+                  <Icon name="pencil" />
                   <span className="wide-only">{t('ai.writeShort')}</span>
                 </button>
+                )}
                 <button
                   className="btn btn-sm btn-quiet"
                   title={hasSelection ? t('editor.explain') : t('editor.explainFile')}
@@ -641,7 +704,7 @@ export default function EditorPanel() {
           </div>
         )}
       </div>
-      {isJava && mode === 'source' && (
+      {isJava && mode === 'source' && (files[active].pkg || method || (compile.state === 'errors' && hasKey && compile.problems.some((p) => p.file === active))) && (
         <div className="breadcrumb">
           <span className="muted">{files[active].pkg ? files[active].pkg + ' ›' : ''}</span>
           <span>{A.simpleName(files[active].className)}</span>

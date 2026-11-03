@@ -5,7 +5,7 @@ import * as A from '../actions.js';
 import { CONCEPTS, GROUPS } from '../lib/glossary.js';
 import { commonErrors } from '../lib/errors.js';
 import monaco from '../lib/monaco.js';
-import Icon from './Icon.jsx';
+import Icon, { Why } from './Icon.jsx';
 
 function Code({ code }) {
   const ref = useRef(null);
@@ -64,7 +64,6 @@ export default function Learn() {
         <div className="page-head">
           <div>
             <h1>{t('learn.title')}</h1>
-            <p>{t('learn.sub')}</p>
           </div>
         </div>
         <div className="learn-grid">
@@ -106,21 +105,20 @@ export default function Learn() {
               <h2>{title}</h2>
               <p>{text}</p>
               <Code code={concept.code} />
-              {!aiOff && <div className="action-row">
-                <button
-                  className="btn btn-sm"
-                  disabled={!project || !hasKey}
-                  title={!project ? t('learn.needProject') : undefined}
-                  onClick={() => {
-                    A.go('project');
-                    A.askTutor(t('tutor.prompt.concept', { concept: title }));
-                  }}
-                >
-                  <Icon name="tutor" />
-                  {t('learn.ask')}
-                </button>
-                {!project && <span className="muted">{t('learn.needProject')}</span>}
-              </div>}
+              {!aiOff && hasKey && project && (
+                <div className="action-row">
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => {
+                      A.go('project');
+                      A.askTutor(t('tutor.prompt.concept', { concept: title }));
+                    }}
+                  >
+                    <Icon name="tutor" />
+                    {t('learn.ask')}
+                  </button>
+                </div>
+              )}
               <div className="learn-pager">
                 {prev ? (
                   <button className="learn-step" onClick={() => setId(prev.id)}>
@@ -138,13 +136,16 @@ export default function Learn() {
             </article>
             {exercises.length > 0 && (
               <section className="err-list" id="exercises">
-                <h2 className="section-title">{t('exercise.title')}</h2>
                 <div className="card">
+                  <div className="card-head">
+                    {t('exercise.title')}
+                    <span className="card-head-aside">{t('exercise.hint')}</span>
+                  </div>
                   {exercises.map((ex) => {
                     const solved = done.includes(ex.id);
                     return (
                       <div className="ex-row" key={ex.id}>
-                        <span className="ex-n">{String(ex.n).padStart(2, '0')}</span>
+                        <span className="ex-n">{ex.n}</span>
                         <div className="ex-text">
                           <h3>{ex.title}</h3>
                           <span className="muted">{ex.topic}</span>
@@ -157,12 +158,11 @@ export default function Learn() {
                     );
                   })}
                 </div>
-                <p className="field-hint ex-hint">{t('exercise.hint')}</p>
               </section>
             )}
             <section className="err-list">
-              <h2 className="section-title">{t('learn.errors')}</h2>
               <div className="card">
+                <div className="card-head">{t('learn.errors')}</div>
                 {errors.map((e) => (
                   <div className="err-row" key={e.id}>
                     <div>
@@ -170,8 +170,8 @@ export default function Learn() {
                       <code>{e.message}</code>
                     </div>
                     <div>
-                      <p>{e.explain}</p>
                       <p className="fix">{e.fix}</p>
+                      <Why>{e.explain}</Why>
                     </div>
                   </div>
                 ))}

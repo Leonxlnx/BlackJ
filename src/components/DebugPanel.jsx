@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store.js';
-import { useT } from '../i18n.js';
+import { useT, formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
 import { valueText } from './InspectorPanel.jsx';
 import Icon from './Icon.jsx';
@@ -21,7 +21,7 @@ function VarRow({ v, depth = 0 }) {
     <>
       <div className="dbg-var" style={{ paddingLeft: 12 + depth * 14 }}>
         <button className={'dbg-twisty' + (expandable ? '' : ' none')} onClick={toggle} aria-label={open ? '−' : '+'}>{expandable ? (open ? '▾' : '▸') : ''}</button>
-        <span className="mono">{v.name}</span>
+        <span className="dbg-name">{v.name}</span>
         <span className="pad-type">{v.type}</span>
         <span className={'mono dbg-val ' + (v.value && v.value.kind === 'string' ? 'v-str' : '')}>{valueText(v.value)}</span>
       </div>
@@ -33,6 +33,7 @@ function VarRow({ v, depth = 0 }) {
 /** The debugger: step through the program, see the call stack and every variable. */
 export default function DebugPanel() {
   const t = useT();
+  const lang = useStore((s) => s.settings.lang);
   const debug = useStore((s) => s.debug);
   const breakpoints = useStore((s) => s.breakpoints);
   const files = useStore((s) => s.files);
@@ -42,11 +43,11 @@ export default function DebugPanel() {
   return (
     <div className="debug">
       <div className="tests-bar">
-        <button className="btn btn-sm btn-primary" disabled={!paused} onClick={() => A.debugCommand('resume')} title="F8"><Icon name="play" />{t('debug.continue')}</button>
+        <button className="btn btn-sm" disabled={!paused} onClick={() => A.debugCommand('resume')} title="F8"><Icon name="play" />{t('debug.continue')}</button>
         <button className="btn btn-sm" disabled={!paused} onClick={() => A.debugCommand('stepOver')} title="F10"><Icon name="stepOver" />{t('debug.over')}</button>
         <button className="btn btn-sm" disabled={!paused} onClick={() => A.debugCommand('stepInto')} title="F11"><Icon name="stepInto" />{t('debug.into')}</button>
-        <button className="btn btn-sm" disabled={!paused} onClick={() => A.debugCommand('stepOut')} title="Umschalt+F11"><Icon name="stepOut" />{t('debug.out')}</button>
-        <button className="btn btn-sm btn-quiet" disabled={!paused} onClick={A.stopProgram}><Icon name="stop" />{t('ws.stop')}</button>
+        <button className="btn btn-sm" disabled={!paused} onClick={() => A.debugCommand('stepOut')} title={formatKeys(lang, 'shift F11', '+')}><Icon name="stepOut" />{t('debug.out')}</button>
+        <button className="btn btn-sm btn-quiet" disabled={!paused} onClick={A.stopProgram}><span className="stop-sq" aria-hidden="true" />{t('ws.stop')}</button>
         <span className="grow" />
         <span className="muted">{count === 1 ? t('debug.bp1') : t('debug.bps', { n: count })}</span>
       </div>

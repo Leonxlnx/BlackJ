@@ -1,14 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useStore, setState, getState } from '../store.js';
-import { useT } from '../i18n.js';
+import { useT, formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
-import { childPackages, simpleName } from '../model.js';
+import { childPackages, simpleName, flowLayout } from '../model.js';
 import { signature } from '../lib/javaParse.js';
 import Icon from './Icon.jsx';
 
 const VIS = { public: '+', private: '−', protected: '#', package: '~' };
 const MAX_MEMBERS = 7;
 const SNAP = 8;
+// The smallest zoom at which class names and members stay readable.
+const MIN_K = 0.75;
 
 function clip(a, p) {
   const cx = a.x + a.w / 2;
@@ -20,7 +22,7 @@ function clip(a, p) {
   return { x: cx + dx * s, y: cy + dy * s };
 }
 
-/** Inheritance flows upwards in a soft curve; "uses" is a straight dashed line. */
+/** A straight edge: "uses" (dashed, open head), or inheritance between cards that sit side by side. */
 function Edge({ from, to, kind, hl }) {
   const cls = (kind === 'uses' ? 'uses' : kind === 'impl' ? 'impl' : '') + (hl ? ' hl' : '');
   const head = (b, ang, len = 11, spread = 0.5) => {
@@ -28,18 +30,6 @@ function Edge({ from, to, kind, hl }) {
     const p2 = { x: b.x - len * Math.cos(ang + spread), y: b.y - len * Math.sin(ang + spread) };
     return { p1, p2, base: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 } };
   };
-  if (kind !== 'uses' && from.y > to.y + to.h + 24) {
-    const s = { x: from.x + from.w / 2, y: from.y };
-    const e = { x: to.x + to.w / 2, y: to.y + to.h };
-    const h = head(e, -Math.PI / 2);
-    const mid = (s.y - h.base.y) / 2;
-    return (
-      <g>
-        <path className={cls} d={`M${s.x} ${s.y} C${s.x} ${s.y - mid} ${h.base.x} ${h.base.y + mid} ${h.base.x} ${h.base.y}`} />
-        <path className={'head' + (hl ? ' hl' : '')} d={`M${e.x} ${e.y} L${h.p1.x} ${h.p1.y} L${h.p2.x} ${h.p2.y} Z`} />
-      </g>
-    );
-  }
   const c1 = { x: from.x + from.w / 2, y: from.y + from.h / 2 };
   const c2 = { x: to.x + to.w / 2, y: to.y + to.h / 2 };
   const a = clip(from, c2);
@@ -54,6 +44,35 @@ function Edge({ from, to, kind, hl }) {
       ) : (
         <path className={'head' + (hl ? ' hl' : '')} d={`M${b.x} ${b.y} L${h.p1.x} ${h.p1.y} L${h.p2.x} ${h.p2.y} Z`} />
       )}
+    </g>
+  );
+}
+
+/** Inheritance as a tree: every child below its parent rises to one shared bus, and a single
+    hollow triangle sits on the parent's bottom edge. */
+function InheritTree({ parent, kids, kind, hl }) {
+  const cls = kind === 'impl' ? 'impl' : '';
+  const px = Math.round(parent.x + parent.w / 2);
+  const tip = parent.y + parent.h;
+  const base = tip + 10;
+  const top = Math.min(...kids.map((k) => k.rect.y));
+  const bus = Math.round(base + Math.max(10, Math.min(28, (top - base) / 2)));
+  const anyHl = hl || kids.some((k) => k.hl);
+  const branch = ({ rect }) => {
+    const cx = Math.round(rect.x + rect.w / 2);
+    const dx = px - cx;
+    if (Math.abs(dx) < 1) return `M${cx} ${rect.y} V${bus}`;
+    const r = Math.min(6, Math.abs(dx) / 2, (rect.y - bus) / 2);
+    const sx = Math.sign(dx);
+    return `M${cx} ${rect.y} V${bus + r} Q${cx} ${bus} ${cx + sx * r} ${bus} H${px}`;
+  };
+  return (
+    <g>
+      {kids.map((k) => (
+        <path key={k.key} className={cls + (hl || k.hl ? ' hl' : '')} d={branch(k)} />
+      ))}
+      <path className={cls + (anyHl ? ' hl' : '')} d={`M${px} ${bus} V${base}`} />
+      <path className={'head' + (anyHl ? ' hl' : '')} d={`M${px} ${tip} L${px - 6} ${base} L${px + 6} ${base} Z`} />
     </g>
   );
 }
@@ -149,6 +168,7 @@ async function quickNew(cls, t, anchor) {
 
 export default function Diagram({ model }) {
   const t = useT();
+  const lang = useStore((s) => s.settings.lang);
   const positions = useStore((s) => s.positions);
   const compile = useStore((s) => s.compile);
   const files = useStore((s) => s.files);
@@ -169,8 +189,15 @@ export default function Diagram({ model }) {
   const cardRefs = useRef({});
   const [sizes, setSizes] = useState({});
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
+  // The grid moves with the canvas; below 50% zoom it steps up so it never turns into a mesh.
+  const gridStep = 24 * view.k * (view.k < 0.5 ? 4 : 1);
   const [panning, setPanning] = useState(false);
   const [dragging, setDragging] = useState(null);
+  // The width (in diagram units) the flow layout packs into, set by fit().
+  const [flowW, setFlowW] = useState(null);
+  const [compact, setCompact] = useState(false);
+  // Card sizes with their member lists, kept while compact hides them.
+  const fullSizes = useRef({});
   const fitted = useRef(null);
 
   const classes = model.list.filter((c) => c.pkg === pkg);
@@ -184,56 +211,204 @@ export default function Diagram({ model }) {
       const el = cardRefs.current[k];
       if (!el) continue;
       next[k] = { w: el.offsetWidth, h: el.offsetHeight };
+      if (!compact) fullSizes.current[k] = next[k];
       if (!sizes[k] || sizes[k].w !== next[k].w || sizes[k].h !== next[k].h) changed = true;
     }
     if (changed || Object.keys(next).length !== Object.keys(sizes).length) setSizes(next);
   });
 
-  const pos = (k) => positions[k] || { x: 32, y: 32 };
+  // Until the user drags a card in this package, the cards follow the diagram's own flow layout,
+  // packed for the panel's width; after that the stored positions count.
+  const manual = !!positions['#moved:' + pkg];
+  const sizeOf = (sz) => (k) => sz[k] || { w: 200, h: 90 };
+  // Compact cards are short, so their rows sit closer together.
+  const gapY = (c) => (c ? 44 : 56);
+  const flow = !manual && flowW ? flowLayout(model, keys, sizeOf(sizes), flowW, 40, gapY(compact)) : null;
+  const pos = (k) => (flow && flow[k]) || positions[k] || { x: 32, y: 32 };
   // The README note (root) or the "parent package" card sits above the top-left of the content.
   const minX0 = keys.length ? Math.min(...keys.map((k) => pos(k).x)) : 32;
   const minY0 = keys.length ? Math.min(...keys.map((k) => pos(k).y)) : 32;
   const noteAt = { x: minX0, y: minY0 - 96 };
   const hasNote = (readme && !pkg) || !!pkg;
-  const fit = (minK = 0.55) => {
+  const bbox = (at, size) => {
+    const minX = Math.min(...keys.map((k) => at[k].x));
+    const minCard = Math.min(...keys.map((k) => at[k].y));
+    const minY = hasNote ? minCard - 96 : minCard;
+    const w = Math.max(...keys.map((k) => at[k].x + size(k).w)) - minX;
+    const h = Math.max(...keys.map((k) => at[k].y + size(k).h)) - minY;
+    return { minX, minY, w, h };
+  };
+  const panelBox = () => {
+    const host = hostRef.current;
+    return { cw: Math.max(120, host.clientWidth - 48), ch: Math.max(120, host.clientHeight - 24 - 56) };
+  };
+  const viewFor = (b, k) => {
+    const { cw } = panelBox();
+    const x = b.w * k > cw ? 24 - b.minX * k : 24 + (cw - b.w * k) / 2 - b.minX * k;
+    return { k, x: Math.round(x), y: Math.round(24 - b.minY * k) };
+  };
+  // Fits the content into the panel with 24px around it and a 56px band at the bottom for the
+  // zoom tools. Below 75% cards get too small to read, so the flow layout first repacks the
+  // cards for the panel's width; if that is not enough the cards drop their member lists
+  // (compact) for as long as the full cards would not fit at 75%.
+  const moved = useRef(false);
+  const fit = (override) => {
     const host = hostRef.current;
     if (!host || !keys.length) return;
-    const xs = keys.map((k) => pos(k).x);
-    const ys = [...keys.map((k) => pos(k).y), ...(hasNote ? [noteAt.y] : [])];
-    const x2 = keys.map((k) => pos(k).x + (sizes[k]?.w || 200));
-    const y2 = keys.map((k) => pos(k).y + (sizes[k]?.h || 90));
-    const minX = Math.min(...xs) - 24;
-    const minY = Math.min(...ys) - 24;
-    const w = Math.max(...x2) - minX + 24;
-    const h = Math.max(...y2) - minY + 76;
-    const k = Math.min(1, Math.max(minK, Math.min(host.clientWidth / w, host.clientHeight / h)));
-    setView({ k, x: (host.clientWidth - w * k) / 2 - minX * k, y: Math.max(0, (host.clientHeight - h * k) / 2) - minY * k });
+    moved.current = false;
+    const { cw, ch } = panelBox();
+    const scale = (b) => Math.min(1, cw / b.w, ch / b.h);
+    const plan = (sz, c) => {
+      const size = sizeOf(sz);
+      if (manual) {
+        const at = Object.fromEntries(keys.map((k) => [k, (override && override[k]) || positions[k] || { x: 32, y: 32 }]));
+        const b = bbox(at, size);
+        return { w: null, b, k: scale(b) };
+      }
+      let best = null;
+      for (const t of [1, 0.9, 0.85, 0.8, MIN_K]) {
+        const w = Math.floor(cw / t);
+        const b = bbox(flowLayout(model, keys, size, w, 40, gapY(c)), size);
+        const k = scale(b);
+        if (!best || k > best.k + 0.001) best = { w, b, k };
+      }
+      return best;
+    };
+    if (details) {
+      if (compact && keys.some((k) => !fullSizes.current[k])) {
+        setCompact(false);
+        return;
+      }
+      const full = plan(compact ? fullSizes.current : sizes, false);
+      const want = full.k < MIN_K;
+      if (want !== compact) {
+        setCompact(want);
+        return;
+      }
+    } else if (compact) {
+      setCompact(false);
+      return;
+    }
+    const p = plan(sizes, compact);
+    if (!manual) setFlowW(p.w);
+    setView(viewFor(p.b, Math.max(0.3, p.k)));
   };
+  const fitRef = useRef(fit);
+  fitRef.current = fit;
+  // Until the user pans or zooms, the diagram keeps fitting the panel when it changes size
+  // (splitters, window size, the side panel turning into a drawer).
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return undefined;
+    let last = { w: host.clientWidth, h: host.clientHeight };
+    let raf = 0;
+    const ro = new ResizeObserver(() => {
+      const now = { w: host.clientWidth, h: host.clientHeight };
+      if (now.w === last.w && now.h === last.h) return;
+      last = now;
+      if (moved.current) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => fitRef.current());
+    });
+    ro.observe(host);
+    return () => {
+      ro.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, []);
 
   /** Saves the whole diagram as a PNG, e.g. for a project report: fitted, without the zoom tools. */
   const exportImage = async () => {
     const host = hostRef.current;
     if (!host || !keys.length) return;
     const before = view;
+    const wasMoved = moved.current;
     setState({ selectedClass: null, highlightClass: null });
-    fit(0.3);
+    const at = Object.fromEntries(keys.map((k) => [k, pos(k)]));
+    const content = bbox(at, sizeOf(sizes));
+    const { cw, ch } = panelBox();
+    setView(viewFor(content, Math.max(0.3, Math.min(1, cw / content.w, ch / content.h))));
     host.classList.add('exporting');
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     await new Promise((r) => setTimeout(r, 80));
+    // Exactly the drawn content (cards and edges) plus 24px, clipped to the panel.
     const b = host.getBoundingClientRect();
+    const parts = [...host.querySelectorAll('.world .dcard, .world .edges path')].map((el) => el.getBoundingClientRect()).filter((r) => r.width || r.height);
+    const box = parts.length
+      ? {
+          left: Math.max(b.left, Math.min(...parts.map((r) => r.left)) - 24),
+          top: Math.max(b.top, Math.min(...parts.map((r) => r.top)) - 24),
+          right: Math.min(b.right, Math.max(...parts.map((r) => r.right)) + 24),
+          bottom: Math.min(b.bottom, Math.max(...parts.map((r) => r.bottom)) + 24),
+        }
+      : { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
     try {
-      await A.saveDiagramImage({ x: b.left, y: b.top, width: b.width, height: b.height });
+      await A.saveDiagramImage({ x: box.left, y: box.top, width: box.right - box.left, height: box.bottom - box.top });
     } finally {
       host.classList.remove('exporting');
       setView(before);
+      moved.current = wasMoved;
     }
   };
 
+  /** A class added to a package the user has arranged goes into the first free spot of the
+      existing rows that is on screen, never into a new column off to the right. */
+  const freeSlot = (key, others, placed) => {
+    const host = hostRef.current;
+    const s = sizeOf(sizes)(key);
+    const rs = others.map((k) => ({ ...(placed[k] || positions[k] || { x: 32, y: 32 }), ...sizeOf(sizes)(k) }));
+    if (!rs.length) return { x: 32, y: 32 };
+    const v = view;
+    const onScreenX = (x) => x * v.k + v.x >= 0 && (x + s.w) * v.k + v.x <= host.clientWidth - 24;
+    const onScreenY = (y) => y * v.k + v.y >= 0 && (y + s.h) * v.k + v.y <= host.clientHeight - 56;
+    const clear = (x, y) => !rs.some((o) => x < o.x + o.w + 32 && x + s.w + 32 > o.x && y < o.y + o.h + 32 && y + s.h + 32 > o.y);
+    const minX = Math.min(...rs.map((o) => o.x));
+    const below = Math.max(...rs.map((o) => o.y + o.h)) + 56;
+    const xs = [...new Set([minX, ...rs.map((o) => o.x + o.w + 40)])].sort((a, b) => a - b);
+    const cands = [];
+    for (const y of [...new Set(rs.map((o) => o.y))].sort((a, b) => a - b).concat(below)) for (const x of xs) cands.push({ x, y });
+    const hit = cands.find((c) => clear(c.x, c.y) && onScreenX(c.x) && onScreenY(c.y)) || cands.find((c) => clear(c.x, c.y) && onScreenX(c.x)) || { x: minX, y: below };
+    return { x: Math.round(hit.x / SNAP) * SNAP, y: Math.round(hit.y / SNAP) * SNAP };
+  };
+
+  // Fit once every card of the opened project or package has been measured, and again whenever
+  // cards are added, removed or change size while the user has not panned or zoomed.
+  const fittedSig = useRef(null);
+  const seenKeys = useRef([]);
+  const pendingFit = useRef(false);
   useEffect(() => {
     const id = projectDir + '|' + pkg + '|' + (arrangedAt || 0);
-    if (fitted.current === id || !Object.keys(sizes).length) return;
-    fitted.current = id;
-    fit();
+    if (!keys.length || !keys.every((k) => sizes[k])) return;
+    const sig = keys.map((k) => k + ':' + sizes[k].w + 'x' + sizes[k].h).join(',') + '|' + compact + '|' + details;
+    if (fitted.current !== id) {
+      fitted.current = id;
+      fittedSig.current = sig;
+      seenKeys.current = keys;
+      fit();
+      return;
+    }
+    if (pendingFit.current) {
+      pendingFit.current = false;
+      fittedSig.current = sig;
+      if (!moved.current) fit();
+      return;
+    }
+    if (sig === fittedSig.current) return;
+    fittedSig.current = sig;
+    const added = keys.filter((k) => !seenKeys.current.includes(k));
+    seenKeys.current = keys;
+    if (manual && added.length && !readOnly) {
+      const others = keys.filter((k) => !added.includes(k));
+      const at = {};
+      for (const k of added) {
+        at[k] = freeSlot(k, others, at);
+        others.push(k);
+      }
+      for (const k of added) A.setPosition(k, at[k]);
+      pendingFit.current = true;
+      return;
+    }
+    if (!moved.current) fit();
   });
 
   const objectsOf = {};
@@ -251,6 +426,18 @@ export default function Diagram({ model }) {
   for (const k of keys) rects[k] = { ...pos(k), w: sizes[k]?.w || 200, h: sizes[k]?.h || 80 };
   const visible = new Set(classes.map((c) => c.fileClass));
   const edges = model.edges.filter((e) => visible.has(e.from) && visible.has(e.to) && (showUses || e.kind !== 'uses'));
+  // Children that sit clearly below their parent join that parent's tree; the rest stay straight lines.
+  const trees = new Map();
+  const straight = [];
+  for (const e of edges) {
+    const a = rects[e.from];
+    const b = rects[e.to];
+    if (e.kind !== 'uses' && a.y > b.y + b.h + 32) {
+      const id = e.to + '|' + e.kind;
+      if (!trees.has(id)) trees.set(id, { parent: e.to, kind: e.kind, kids: [] });
+      trees.get(id).kids.push({ key: e.from, rect: a, hl: highlight === e.from });
+    } else straight.push(e);
+  }
 
   /** Arrow keys move the selection to the nearest class card in that direction. */
   const moveSelection = (from, key) => {
@@ -279,6 +466,7 @@ export default function Diagram({ model }) {
   const kinds = new Set(edges.map((e) => e.kind));
 
   const onWheel = (e) => {
+    moved.current = true;
     if (e.ctrlKey) {
       const host = hostRef.current.getBoundingClientRect();
       const mx = e.clientX - host.left;
@@ -290,6 +478,7 @@ export default function Diagram({ model }) {
     } else setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
   };
   const zoomBy = (f) => {
+    moved.current = true;
     const host = hostRef.current;
     const mx = host.clientWidth / 2;
     const my = host.clientHeight / 2;
@@ -306,6 +495,7 @@ export default function Diagram({ model }) {
     let lx = e.clientX;
     let ly = e.clientY;
     const move = (ev) => {
+      moved.current = true;
       setView((v) => ({ ...v, x: v.x + ev.clientX - lx, y: v.y + ev.clientY - ly }));
       lx = ev.clientX;
       ly = ev.clientY;
@@ -329,6 +519,8 @@ export default function Diagram({ model }) {
       const dx = (ev.clientX - start.x) / view.k;
       const dy = (ev.clientY - start.y) / view.k;
       if (!moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+      // The first card the user moves pins the whole flow layout of this package as it is shown.
+      if (!moved && flow) A.pinLayout(pkg, Object.fromEntries(keys.map((k) => [k, { ...pos(k) }])));
       moved = true;
       setDragging(key);
       A.setPosition(key, { x: Math.round(origin.x + dx), y: Math.round(origin.y + dy) });
@@ -347,16 +539,17 @@ export default function Diagram({ model }) {
   };
 
   const compiledOk = compile.state === 'ok' && benchState !== 'off';
+  const showMembers = details && !compact;
 
   return (
     <section className="panel" aria-label={t('diagram.title')}>
       <div className="panel-head">
         <h2>{t('diagram.title')}</h2>
-        {pkg && <span className="muted mono head-pkg">{pkg}</span>}
+        {pkg && <span className="head-pkg">{pkg}</span>}
         <span className="grow" />
         {!readOnly && (
           <>
-            <button className="icon-btn" aria-label={t('ws.newClass')} title={t('ws.newClass') + ' · Strg+N'} onClick={() => A.openDialogBox({ type: 'newClass' })}>
+            <button className="icon-btn" aria-label={t('ws.newClass')} title={t('ws.newClass') + ' · ' + formatKeys(lang, 'ctrl N', '+')} onClick={() => A.openDialogBox({ type: 'newClass' })}>
               <Icon name="plus" />
             </button>
             <button className="icon-btn" aria-label={t('diagram.newPackage')} title={t('diagram.newPackage')} onClick={() => A.openDialogBox({ type: 'newPackage' })}>
@@ -364,10 +557,10 @@ export default function Diagram({ model }) {
             </button>
           </>
         )}
-        <button className="icon-btn" aria-pressed={details} aria-label={t('diagram.details')} title={t('diagram.details')} onClick={() => A.updateSettings({ diagramDetails: !details })} style={details ? { color: 'var(--text)' } : undefined}>
+        <button className="icon-btn" aria-pressed={details} aria-label={t('diagram.details')} title={t('diagram.details')} onClick={() => A.updateSettings({ diagramDetails: !details })}>
           <Icon name="layers" />
         </button>
-        <button className="icon-btn" aria-pressed={showUses} aria-label={t('diagram.showUses')} title={t('diagram.showUses')} onClick={() => A.updateSettings({ showUses: !showUses })} style={showUses ? { color: 'var(--text)' } : undefined}>
+        <button className="icon-btn" aria-pressed={showUses} aria-label={t('diagram.showUses')} title={t('diagram.showUses')} onClick={() => A.updateSettings({ showUses: !showUses })}>
           <Icon name="link" />
         </button>
         {!readOnly && (
@@ -403,7 +596,7 @@ export default function Diagram({ model }) {
           <Icon name="more" />
         </button>
       </div>
-      <div className={'diagram' + (panning ? ' panning' : '')} ref={hostRef} onPointerDown={startPan} onWheel={onWheel}>
+      <div className={'diagram' + (panning ? ' panning' : '') + (compact ? ' compact' : '')} ref={hostRef} onPointerDown={startPan} onWheel={onWheel} style={{ backgroundSize: `${gridStep}px ${gridStep}px`, backgroundPosition: `${view.x}px ${view.y}px` }}>
         {keys.length === 0 && !pkg ? (
           <div className="diagram-empty">
             <span>{t('diagram.empty')}</span>
@@ -415,8 +608,11 @@ export default function Diagram({ model }) {
         ) : (
           <div className="world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}>
             <svg className="edges" width="1" height="1">
-              {edges.map((e, i) => (
+              {straight.map((e, i) => (
                 <Edge key={i} from={rects[e.from]} to={rects[e.to]} kind={e.kind} hl={highlight && (e.from === highlight || e.to === highlight) && e.kind !== 'uses'} />
+              ))}
+              {[...trees.entries()].map(([id, tr]) => (
+                <InheritTree key={id} parent={rects[tr.parent]} kids={tr.kids} kind={tr.kind} hl={highlight === tr.parent} />
               ))}
             </svg>
 
@@ -504,13 +700,13 @@ export default function Diagram({ model }) {
                       <span className="class-name">{info.simple}</span>
                       <span className={'state-dot ' + state} title={errors ? t('diagram.errors', { n: errors }) : stale ? t('diagram.notCompiled') : t('diagram.compiled')} />
                     </div>
-                    {(errors > 0 || (!details && (info.extends[0] || info.implements.length))) && (
+                    {(errors > 0 || (!showMembers && (!!info.extends[0] || info.implements.length > 0))) && (
                       <div className="class-meta">
                         {errors > 0 ? <span className="pill pill-neg">{t('diagram.errors', { n: errors })}</span> : <span>{info.extends[0] ? `extends ${info.extends[0]}` : `implements ${info.implements.join(', ')}`}</span>}
                       </div>
                     )}
                   </div>
-                  {details && <Members info={info} />}
+                  {showMembers && <Members info={info} />}
                   {(objs.length > 0 || tr) && (
                     <div className="class-foot">
                       {tr ? (

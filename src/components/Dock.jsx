@@ -4,7 +4,7 @@ import { useT, translate } from '../i18n.js';
 import * as A from '../actions.js';
 import { explainProblem } from '../lib/errors.js';
 import { explainException } from '../lib/exceptions.js';
-import Icon from './Icon.jsx';
+import Icon, { Why } from './Icon.jsx';
 import CodePad from './CodePad.jsx';
 import TestsPanel from './TestsPanel.jsx';
 import DebugPanel from './DebugPanel.jsx';
@@ -41,11 +41,11 @@ export async function objectMenu(obj, x, y) {
     items.push({ type: 'sep' });
   } else if (obj.className && obj.value && obj.value.kind !== 'null' && obj.value.kind !== 'array') {
     // A library object (String, ArrayList, Random …): its methods in a searchable list.
-    items.push({ label: t('menu.libMethods'), icon: 'play', onClick: () => A.openDialogBox({ type: 'library', target: obj.name, cls: obj.className, typeLabel: obj.type }) });
+    items.push({ label: t('menu.libMethods'), onClick: () => A.openDialogBox({ type: 'library', target: obj.name, cls: obj.className, typeLabel: obj.type }) });
     items.push({ type: 'sep' });
   }
-  items.push({ label: t('menu.inspect'), icon: 'eye', onClick: () => A.showInspector(obj.name, obj.name) });
-  items.push({ label: t('menu.remove'), icon: 'trash', onClick: () => A.removeObject(obj.name) });
+  items.push({ label: t('menu.inspect'), onClick: () => A.showInspector(obj.name, obj.name) });
+  items.push({ label: t('menu.remove'), onClick: () => A.removeObject(obj.name) });
   A.openMenu({ x, y, items });
 }
 
@@ -58,7 +58,7 @@ function Bench() {
   if (!objects.length) {
     return (
       <div className="dock-empty">
-        <div className="empty-line">{benchState === 'off' ? t('bench.emptyNotCompiled') : t('bench.empty')}</div>
+        <div className="empty-line">{benchState === 'off' ? <>{t('bench.emptyNotCompiled')} <kbd>{t('bench.compileKey')}</kbd></> : t('bench.empty')}</div>
       </div>
     );
   }
@@ -196,15 +196,18 @@ function Problems() {
                 </button>
               </div>
             )}
-            {exception.message && <p className="mono" style={{ color: 'var(--text)' }}>{exception.message}</p>}
-            <p>{ex.explain} <span className="fix">{ex.fix}</span></p>
-            <div className="frames">
+            <p className="problem-fix">{ex.fix}</p>
+            <div className="problem-loc">
               {(exception.frames || []).filter((fr) => fr.project).map((fr, i) => (
-                <button key={i} className="problem-where" style={{ textAlign: 'left' }} onClick={() => A.openClass(fr.className, fr.line)}>
-                  {t('problems.at', { cls: A.simpleName(fr.className), method: fr.method, line: fr.line })}
+                <button key={i} className="problem-where" onClick={() => A.openClass(fr.className, fr.line)}>
+                  {t('problems.at', { file: A.simpleName(fr.className).split('$')[0] + '.java', method: fr.method, line: fr.line })}
                 </button>
               ))}
             </div>
+            <Why>
+              <span>{ex.explain}</span>
+              {exception.message && <span className="mono">{exception.simpleType}: {exception.message}</span>}
+            </Why>
           </div>
         );
       })()}
@@ -221,7 +224,7 @@ function Problems() {
               )}
               {hasKey && (
                 <button className="btn btn-sm" onClick={() => A.aiFix(p)}>
-                  <Icon name="spark" />
+                  <Icon name="tutor" />
                   {t('ai.fix')}
                 </button>
               )}
@@ -232,13 +235,16 @@ function Problems() {
                 </button>
               )}
             </div>
-            <div>
+            <p className="problem-fix">{ex.fix}</p>
+            <div className="problem-loc">
               <button className="problem-where" onClick={() => A.openFile(p.file, p.line)}>
-                {p.file} · {t('problems.line', { line: p.line })}
+                {p.file.split('/').pop()} · {t('problems.line', { line: p.line })}
               </button>
             </div>
-            <p>{ex.explain} <span className="fix">{ex.fix}</span></p>
-            <div className="orig">javac: {p.message}{p.details.length ? ' · ' + p.details.join(' · ') : ''}</div>
+            <Why>
+              <span>{ex.explain}</span>
+              <span className="mono">javac: {p.message}{p.details.length ? ' · ' + p.details.join(' · ') : ''}</span>
+            </Why>
           </div>
         );
       })}
@@ -301,14 +307,14 @@ export default function Dock() {
           </button>
         )}
         {dock === 'console' && consoleLines > 0 && <button className="btn btn-sm btn-quiet" onClick={A.clearConsole}>{t('console.clear')}</button>}
-        {(benchState === 'running' || benchState === 'waiting') && (
+        {(benchState === 'running' || benchState === 'waiting') && dock !== 'debug' && (
           <button className="btn btn-sm" onClick={A.stopProgram}>
             <Icon name="stop" />
             {t('ws.stop')}
           </button>
         )}
         <button className="icon-btn" aria-label={collapsed ? t('dock.expand') : t('dock.collapse')} title={collapsed ? t('dock.expand') : t('dock.collapse')} onClick={() => setState({ dockCollapsed: !collapsed })}>
-          <Icon name="chevron" style={{ transform: collapsed ? 'rotate(180deg)' : 'none' }} />
+          <Icon name={collapsed ? 'chevronUp' : 'chevron'} />
         </button>
       </div>
       <div className="dock-body" style={{ display: collapsed ? 'none' : 'flex', flexDirection: 'column' }}>

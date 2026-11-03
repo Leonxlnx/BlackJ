@@ -1,10 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useStore, setState } from '../store.js';
+import { useStore } from '../store.js';
 import { useT } from '../i18n.js';
 import * as A from '../actions.js';
-import Icon from './Icon.jsx';
-
-const VIS = { public: '+', private: '−', protected: '#', package: '~' };
 
 export function valueText(v) {
   if (!v) return '';
@@ -45,7 +42,6 @@ export default function InspectorPanel() {
     return (
       <div className="side-body">
         <div className="side-empty">
-          <Icon name="eye" />
           <p>{t('inspect.empty')}</p>
         </div>
       </div>
@@ -60,7 +56,6 @@ export default function InspectorPanel() {
   };
   const rows = data && !data.error ? data.fields || [] : [];
   const items = data && !data.error ? data.items : null;
-  const hasPrivate = rows.some((f) => f.visibility === 'private');
   const isHandle = String(top.ref).startsWith('#');
 
   return (
@@ -70,7 +65,7 @@ export default function InspectorPanel() {
           {stack.map((s, i) => (
             <span key={i} className="crumb-wrap">
               {i > 0 && <span className="crumb-sep">›</span>}
-              <button className="crumb mono" onClick={() => setStack((st) => st.slice(0, i + 1))} disabled={i === stack.length - 1}>{s.label}</button>
+              <button className="crumb" onClick={() => setStack((st) => st.slice(0, i + 1))} disabled={i === stack.length - 1}>{s.label}</button>
             </span>
           ))}
         </div>
@@ -90,7 +85,7 @@ export default function InspectorPanel() {
                 <tbody>
                   {items.map((it) => (
                     <tr key={it.name}>
-                      <td className="fname mono">{it.name}</td>
+                      <td className="fname">{it.name}</td>
                       <td className="fval">{cell(it.value, it.name)}</td>
                     </tr>
                   ))}
@@ -107,7 +102,6 @@ export default function InspectorPanel() {
                   <tbody>
                     {rows.map((f) => (
                       <tr key={f.declaredIn + f.name}>
-                        <td className="vis" title={f.visibility}>{VIS[f.visibility]}</td>
                         <td className="fname">
                           {f.name}
                           <span className="ftype">{f.type}</span>
@@ -125,7 +119,6 @@ export default function InspectorPanel() {
                     <tbody>
                       {data.statics.map((f) => (
                         <tr key={f.name}>
-                          <td className="vis">{VIS[f.visibility]}</td>
                           <td className="fname">
                             {f.name}
                             <span className="ftype">{f.type}</span>
@@ -138,13 +131,13 @@ export default function InspectorPanel() {
                 </>
               )}
               {top.isClass && (!data.statics || !data.statics.length) && <p className="muted">{t('inspect.noStatics')}</p>}
-              {hasPrivate && <p className="field-hint insp-note">{t('inspect.privateNote')}</p>}
             </>
           )}
-          <div className="action-row insp-actions">
-            {isHandle && <button className="btn btn-sm" onClick={() => A.storeOnBench(top.ref)}><Icon name="plus" />{t('result.toBench')}</button>}
-            <button className="btn btn-sm btn-quiet" onClick={() => setState({ inspect: null })}>{t('common.close')}</button>
-          </div>
+          {isHandle && (
+            <div className="action-row insp-actions">
+              <button className="btn btn-sm" onClick={() => A.storeOnBench(top.ref)}>{t('result.toBench')}</button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -38,7 +38,7 @@ export async function updateSettings(patch) {
 }
 
 export function go(view) {
-  setState({ view, menu: null, palette: null });
+  setState((s) => ({ view, menu: null, palette: null, toast: s.view === view ? s.toast : null }));
 }
 
 export function errorText(err) {
@@ -58,7 +58,20 @@ function loadProject(p) {
   const files = {};
   for (const f of p.files) files[f.name] = { name: f.name, className: f.className, pkg: f.pkg || '', content: f.content, saved: f.content };
   const model = projectModel(files);
-  const positions = layoutAll(model, p.positions || {});
+  const stored = p.positions || {};
+  const positions = layoutAll(model, stored);
+  // Positions saved before BlackJ marked arranged packages ('#moved:<pkg>'), or read from BlueJ:
+  // a package whose cards are not where the automatic layout would put them was arranged by hand.
+  if (!stored['#v']) {
+    positions['#v'] = 2;
+    const scratch = layoutAll(model, {});
+    const pkgOf = (k) => (k.startsWith('pkg:') ? packageOfClass(k.slice(4)) : model.byName[k] ? model.byName[k].pkg : null);
+    for (const [k, v] of Object.entries(stored)) {
+      const pk = pkgOf(k);
+      if (pk == null || k.startsWith('#')) continue;
+      if (!scratch[k] || scratch[k].x !== v.x || scratch[k].y !== v.y) positions['#moved:' + pk] = true;
+    }
+  }
   const firstTab = p.files.find((f) => f.content.includes('static void main')) || p.files.find((f) => !/Test\.java$/.test(f.name)) || p.files[0];
   // An exercise opens with its task (README) in front, the class to work on next to it.
   const tabs = firstTab ? [firstTab.name] : [];
@@ -192,6 +205,13 @@ export function enterPackage(pkg) {
   const s = getState();
   const model = projectModel(s.files);
   setState({ pkg, selectedClass: null, positions: autoLayout(model, s.positions, pkg) });
+}
+
+/** Keeps the diagram's flow layout of a package as stored positions: the user starts arranging. */
+export function pinLayout(pkg, at) {
+  setState((s) => ({ positions: { ...s.positions, ...at, '#v': 2, ['#moved:' + pkg]: true } }));
+  clearTimeout(positionsTimer);
+  positionsTimer = setTimeout(persistPositions, 500);
 }
 
 let positionsTimer = null;
@@ -387,6 +407,8 @@ export function arrange() {
   const s = getState();
   const model = projectModel(s.files);
   const keep = Object.fromEntries(Object.entries(s.positions).filter(([k]) => {
+    if (k === '#moved:' + s.pkg) return false;
+    if (k.startsWith('#')) return true;
     if (k.startsWith('pkg:')) return packageOfClass(k.slice(4)) !== s.pkg;
     const info = model.byName[k];
     return info ? info.pkg !== s.pkg : true;

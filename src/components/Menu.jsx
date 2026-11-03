@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useStore } from '../store.js';
+import { formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
 import Icon from './Icon.jsx';
 
@@ -7,6 +8,7 @@ export default function Menu() {
   const menu = useStore((s) => s.menu);
   const ref = useRef(null);
   const [pos, setPos] = useState(null);
+  const lang = useStore((s) => s.settings.lang);
 
   useLayoutEffect(() => {
     if (!menu || !ref.current) return;
@@ -37,6 +39,8 @@ export default function Menu() {
   }, [menu]);
 
   if (!menu) return null;
+  // When some rows have an icon, the others keep an empty slot so all labels share one left edge.
+  const hasIcons = menu.items.some((it) => it.icon);
   const onKey = (e) => {
     const items = [...ref.current.querySelectorAll('.menu-item:not(:disabled)')];
     const i = items.indexOf(document.activeElement);
@@ -49,7 +53,7 @@ export default function Menu() {
     }
   };
   return (
-    <div className="menu" role="menu" ref={ref} style={{ left: pos ? pos.x : menu.x, top: pos ? pos.y : menu.y, visibility: pos ? 'visible' : 'hidden' }} onKeyDown={onKey}>
+    <div className={'menu' + (hasIcons ? ' has-icons' : '')} role="menu" ref={ref} style={{ left: pos ? pos.x : menu.x, top: pos ? pos.y : menu.y, visibility: pos ? 'visible' : 'hidden' }} onKeyDown={onKey}>
       {menu.items.map((it, i) => {
         if (it.type === 'sep') return i > 0 ? <div key={i} className="menu-sep" /> : null;
         if (it.type === 'label') return <div key={i} className="menu-label">{it.text}</div>;
@@ -65,9 +69,9 @@ export default function Menu() {
               it.onClick && it.onClick();
             }}
           >
-            {it.icon && <Icon name={it.icon} width="14" height="14" />}
+            {it.icon ? <Icon name={it.icon} width="14" height="14" /> : hasIcons && <span className="menu-ico" />}
             {it.label}
-            {it.hint && <span className="menu-hint">{it.hint}</span>}
+            {it.keys ? <kbd className="menu-hint">{formatKeys(lang, it.keys)}</kbd> : it.hint && <span className="menu-hint">{it.hint}</span>}
           </button>
         );
       })}

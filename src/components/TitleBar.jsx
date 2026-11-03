@@ -1,12 +1,13 @@
 import { useMemo } from 'react';
 import { useStore } from '../store.js';
-import { useT } from '../i18n.js';
+import { useT, formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
-import Icon, { Mark } from './Icon.jsx';
+import Icon from './Icon.jsx';
 
 /** The window's own title bar: where you are, search, and the actions you use most. */
 export default function TitleBar() {
   const t = useT();
+  const lang = useStore((s) => s.settings.lang);
   const view = useStore((s) => s.view);
   const project = useStore((s) => s.project);
   const pkg = useStore((s) => s.pkg);
@@ -27,7 +28,6 @@ export default function TitleBar() {
   return (
     <header className="titlebar">
       <div className="tb-left">
-        <Mark className="tb-mark" />
         {inProject ? (
           <nav className="crumbs-bar" aria-label="Pfad">
             <h1 className="tb-title">
@@ -41,14 +41,14 @@ export default function TitleBar() {
             ))}
           </nav>
         ) : (
-          <span className="tb-title"><span className="tb-brand">BlackJ</span>{viewTitle ? ` · ${viewTitle}` : ''}</span>
+          <span className="tb-title">{viewTitle || 'BlackJ'}</span>
         )}
       </div>
 
       <button className="tb-search" onClick={() => A.openPalette()} aria-label={t('palette.placeholder')}>
         <Icon name="search" />
         <span>{inProject ? t('palette.placeholder') : t('palette.placeholderHome')}</span>
-        <kbd>Strg P</kbd>
+        <kbd>{formatKeys(lang, 'ctrl P')}</kbd>
       </button>
 
       <div className="tb-right">
@@ -78,11 +78,11 @@ export default function TitleBar() {
                 </button>
               )
             )}
-            <button className="btn btn-sm btn-primary" onClick={A.compile} disabled={compileState === 'compiling'} title={t('ws.compile') + ' · Strg+K'}>
+            <button className="btn btn-sm btn-primary" onClick={A.compile} disabled={compileState === 'compiling'} title={t('ws.compile') + ' · ' + formatKeys(lang, 'ctrl K', '+')}>
               <Icon name="build" />
               <span className="tb-label">{compileState === 'compiling' ? t('ws.compiling') : t('ws.compile')}</span>
             </button>
-            <button className={'icon-btn tb-toggle' + (tutorOpen ? ' on' : '')} aria-pressed={tutorOpen} aria-label={t('ws.sidePanel')} title={t('ws.sidePanel') + ' · Strg+Umschalt+L'} onClick={A.toggleTutor}>
+            <button className={'icon-btn tb-toggle' + (tutorOpen ? ' on' : '')} aria-pressed={tutorOpen} aria-label={t('ws.sidePanel')} title={t('ws.sidePanel') + ' · ' + formatKeys(lang, 'ctrl shift L', '+')} onClick={A.toggleTutor}>
               <Icon name="sidebar" />
             </button>
           </>

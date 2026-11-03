@@ -45,6 +45,16 @@ function sourceDoc(model, dialog) {
   return hit && hit.doc;
 }
 
+/** "Erzeugt einen neuen Hund." under "Neues Objekt · new Hund(…)" says nothing new, so it is left out. */
+function restatesTitle(text, sname, kind) {
+  if (kind !== 'new') return false;
+  const plain = text.trim().replace(/[.!]+$/, '').toLowerCase();
+  const n = sname.toLowerCase();
+  const words = plain.split(/\s+/);
+  return words.includes(n) && words.every((w) => w === n || FILLER.has(w));
+}
+const FILLER = new Set(['erzeugt', 'erstellt', 'konstruktor', 'für', 'fuer', 'creates', 'create', 'constructs', 'constructor', 'for', 'ein', 'eine', 'einen', 'a', 'an', 'the', 'neue', 'neuen', 'neues', 'neuer', 'new', 'objekt', 'object', 'der', 'klasse', 'of', 'class']);
+
 function CallDialog({ dialog }) {
   const t = useT();
   const files = useStore((s) => s.files);
@@ -78,7 +88,11 @@ function CallDialog({ dialog }) {
   const [busy, setBusy] = useState(false);
 
   const setArg = (i, v) => setArgs((a) => a.map((x, j) => (j === i ? v : x)));
-  const statement = A.statementFor({ kind: kind === 'new' ? 'new' : 'call', cls, target, method, args, name });
+  // Empty arguments show as their parameter name in grey instead of invalid Java ("", dangling commas).
+  const paramLabel = (p) => (/^arg\d+$/.test(p.name) ? simple(p.type) : p.name);
+  const shownArgs = args.map((a, i) => (a.kind === 'text' && !String(a.text ?? '').trim() ? { kind: 'ref', name: '\u0000' + i + '\u0000' } : a));
+  const statementText = A.statementFor({ kind: kind === 'new' ? 'new' : 'call', cls, target, method, args: shownArgs, name });
+  const statement = statementText.split(/\u0000(\d+)\u0000/).map((part, i) => (i % 2 ? <span key={i} className="ph">{paramLabel(method.params[Number(part)])}</span> : part));
   const title = kind === 'new' ? t('call.title.new') : t('call.title.call');
   const sub = kind === 'new' ? `new ${sname}(…)` : `${kind === 'static' ? sname : target}.${method.name}(…)`;
 
@@ -105,14 +119,13 @@ function CallDialog({ dialog }) {
           <span className="grow" />
           <button className="btn btn-quiet" onClick={A.closeDialog}>{t('call.cancel')}</button>
           <button className="btn btn-primary" onClick={submit} disabled={busy}>
-            <Icon name={kind === 'new' ? 'plus' : 'play'} />
             {kind === 'new' ? t('call.create') : t('call.run')}
           </button>
         </>
       }
     >
       <form onSubmit={submit} style={{ display: 'contents' }}>
-        {doc && doc.text && <p className="doc">{doc.text}</p>}
+        {doc && doc.text && !restatesTitle(doc.text, sname, kind) && <p className="doc">{doc.text}</p>}
         {kind === 'new' && (
           <label className="field">
             <span className="field-label">{t('call.objectName')}</span>
@@ -195,8 +208,8 @@ function ResultDialog({ dialog }) {
             </button>
           )}
           <span className="grow" />
-          {isRef && <button className="btn btn-quiet" onClick={() => { A.showInspector(v.handle, label); A.closeDialog(); }}><Icon name="eye" />{t('result.inspect')}</button>}
-          {isRef && <button className="btn" onClick={() => A.storeOnBench(v.handle)}><Icon name="plus" />{t('result.toBench')}</button>}
+          {isRef && <button className="btn btn-quiet" onClick={() => { A.showInspector(v.handle, label); A.closeDialog(); }}>{t('result.inspect')}</button>}
+          {isRef && <button className="btn" onClick={() => A.storeOnBench(v.handle)}>{t('result.toBench')}</button>}
           <button className="btn btn-primary" onClick={A.closeDialog}>{t('result.close')}</button>
         </>
       }
@@ -228,6 +241,13 @@ function DiffDialog({ dialog }) {
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       renderOverviewRuler: false,
+      stickyScroll: { enabled: false },
+      glyphMargin: false,
+      lineDecorationsWidth: 8,
+      renderIndicators: true,
+      renderMarginRevertIcon: false,
+      renderGutterMenu: false,
+      scrollbar: { useShadows: false, verticalScrollbarSize: 10 },
     });
     ed.setModel({ original, modified });
     const changes = setTimeout(() => {
@@ -253,7 +273,6 @@ function DiffDialog({ dialog }) {
           <span className="grow" />
           <button className="btn btn-quiet" onClick={A.closeDialog}>{t('diff.reject')}</button>
           <button className="btn btn-primary" onClick={() => A.applyDiff(dialog.file, modRef.current.getValue())}>
-            <Icon name="check" />
             {t('diff.accept')}
           </button>
         </>
@@ -292,7 +311,6 @@ function NewClassDialog() {
         <>
           <button className="btn btn-quiet" onClick={A.closeDialog}>{t('common.cancel')}</button>
           <button className="btn btn-primary" onClick={submit} disabled={!valid || !!exists}>
-            <Icon name="plus" />
             {t('newClass.create')}
           </button>
         </>
@@ -375,7 +393,6 @@ function JarDialog() {
         <>
           <button className="btn btn-quiet" onClick={A.closeDialog}>{t('common.cancel')}</button>
           <button className="btn btn-primary" onClick={() => A.exportJar(main || null, src)}>
-            <Icon name="save" />
             {t('jar.export')}
           </button>
         </>
@@ -543,7 +560,6 @@ function DeleteDialog({ dialog }) {
         <>
           <button className="btn btn-quiet" onClick={A.closeDialog}>{t('common.cancel')}</button>
           <button className="btn btn-danger" onClick={() => A.deleteClass(dialog.cls)}>
-            <Icon name="trash" />
             {t('delete.confirm')}
           </button>
         </>

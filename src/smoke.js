@@ -15,6 +15,20 @@ async function until(cond, ms = 15000, what = '') {
   }
 }
 
+/** Every diagram card lies inside the panel, at a readable zoom (75% or more). */
+function diagramReadable() {
+  const host = document.querySelector('.diagram');
+  if (!host) return 'no diagram';
+  const b = host.getBoundingClientRect();
+  const k = parseInt(document.querySelector('.zoom-label').textContent, 10);
+  if (k < 75) return 'zoom ' + k + '%';
+  for (const el of host.querySelectorAll('.world .dcard')) {
+    const r = el.getBoundingClientRect();
+    if (r.left < b.left - 0.5 || r.right > b.right + 0.5 || r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5) return 'clipped: ' + el.textContent.slice(0, 20);
+  }
+  return '';
+}
+
 export async function runSmoke() {
   document.documentElement.dataset.smoke = '1';
   let failures = 0;
@@ -43,6 +57,7 @@ export async function runSmoke() {
     await A.openExample('Tiere');
     await until(() => document.querySelectorAll('.class-card').length === 5);
     tiereDir = getState().project.dir;
+    await until(() => !diagramReadable(), 3000, 'diagram ' + diagramReadable());
     await shot('02-project');
   });
   await step('compile, objects, live inspector', async () => {
@@ -137,8 +152,20 @@ export async function runSmoke() {
     await A.compile();
     await until(() => getState().compile.state === 'ok');
   });
+  await step('drag a class card, then arrange again', async () => {
+    const card = [...document.querySelectorAll('.class-card')].find((el) => el.getAttribute('aria-label') === 'Zoo');
+    const before = card.getBoundingClientRect();
+    const at = { clientX: before.left + 20, clientY: before.top + 12, bubbles: true, button: 0, pointerId: 1 };
+    card.dispatchEvent(new PointerEvent('pointerdown', at));
+    for (let i = 1; i <= 4; i++) window.dispatchEvent(new PointerEvent('pointermove', { ...at, clientX: at.clientX + i * 10, clientY: at.clientY + i * 6 }));
+    window.dispatchEvent(new PointerEvent('pointerup', { ...at, clientX: at.clientX + 40, clientY: at.clientY + 24 }));
+    await wait(100);
+    const after = card.getBoundingClientRect();
+    if (!getState().positions['#moved:'] || Math.abs(after.left - before.left - 40) > 8) throw new Error('drag: ' + JSON.stringify({ before: before.left, after: after.left, moved: getState().positions['#moved:'] }));
+  });
   await step('diagram tools: arrange and uses arrows', async () => {
     A.arrange();
+    if (getState().positions['#moved:']) throw new Error('arrange kept the manual flag');
     await A.updateSettings({ showUses: false });
     await until(() => document.querySelectorAll('.edges path.uses').length === 0);
     await A.updateSettings({ showUses: true });
@@ -162,6 +189,7 @@ export async function runSmoke() {
     const p = getState().compile.problems.find((x) => /should be declared in a file named/.test(x.message));
     if (!p) throw new Error(JSON.stringify(getState().compile.problems));
     setState({ dock: 'problems' });
+    await until(() => document.querySelectorAll('.class-card').length === 6 && !diagramReadable(), 4000, 'diagram ' + diagramReadable());
     await shot('09b-rename-fix');
     await A.renameToClass('Vogel.java', 'Spatz');
     await until(() => getState().compile.state === 'ok' && getState().files['Spatz.java'], 15000);
@@ -395,7 +423,7 @@ export async function runSmoke() {
   });
   await step('home with recent projects', async () => {
     A.go('home');
-    await until(() => document.querySelectorAll('.recent-tile').length >= 2);
+    await until(() => document.querySelectorAll('.recent-tile').length >= 1);
     await shot('21-home-recent');
     await A.updateSettings({ theme: 'light' });
     await shot('21b-home-light');

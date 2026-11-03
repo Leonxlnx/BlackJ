@@ -35,7 +35,7 @@ export default function TestsPanel() {
   return (
     <div className="tests">
       <div className="tests-bar">
-        <button className="btn btn-sm btn-primary" onClick={() => A.runTests({ all: true })} disabled={tests.running}>
+        <button className="btn btn-sm" onClick={() => A.runTests({ all: true })} disabled={tests.running}>
           <Icon name="play" />
           {tests.running ? t('tests.running') : t('tests.runAll')}
         </button>
@@ -64,7 +64,7 @@ export default function TestsPanel() {
                 <button className="test-name" onClick={() => r.file && A.openFile(r.file.replace(/\\/g, '/'), r.line)} title={r.file ? `${r.file}:${r.line}` : ''}>
                   {!r.displayName || r.displayName === r.name || r.displayName === r.name + '()' ? r.name : r.displayName.startsWith('[') ? `${r.name} ${r.displayName}` : r.displayName}
                 </button>
-                <span className="muted">{r.ms != null ? `${formatNumber(lang, r.ms)} ms` : ''}</span>
+                <span className="muted test-time">{r.ms != null ? `${formatNumber(lang, r.ms)} ms` : ''}</span>
                 <button className="link" onClick={() => A.runTests({ className: cls, method: r.name })}>{t('tests.runOne')}</button>
                 {(r.status === 'failed' || r.status === 'error') && (
                   <div className="test-fail">

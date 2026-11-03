@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore, getState, setState } from '../store.js';
-import { useT } from '../i18n.js';
+import { useT, formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
 import { CONCEPTS } from '../lib/glossary.js';
 import Icon from './Icon.jsx';
@@ -49,11 +49,11 @@ export default function CommandPalette() {
     const s = getState();
     const model = project ? A.modelOf(files) : null;
     const cmds = [];
-    const cmd = (label, run, hint, icon) => cmds.push({ kind: 'cmd', label, run, hint, icon });
+    const cmd = (label, run, keys, icon) => cmds.push({ kind: 'cmd', label, run, keys, icon });
     if (project) {
-      cmd(t('ws.compile'), A.compile, 'Strg+K', 'build');
+      cmd(t('ws.compile'), A.compile, 'ctrl K', 'build');
       for (const c of model.list.filter((x) => x.hasMain)) cmd(`${t('ws.runMain')}: ${c.simple}`, () => A.runMain(c.fileClass), 'F5', 'play');
-      cmd(t('ws.newClass'), () => A.openDialogBox({ type: 'newClass' }), 'Strg+N', 'plus');
+      cmd(t('ws.newClass'), () => A.openDialogBox({ type: 'newClass' }), 'ctrl N', 'plus');
       cmd(t('diagram.newPackage'), () => A.openDialogBox({ type: 'newPackage' }), '', 'folder');
       if (model.list.some((c) => c.isTest)) cmd(t('tests.runAll'), () => A.runTests({ all: true }), '', 'check');
       cmd(t('pad.open'), () => setState({ dock: 'pad' }), '', 'terminal');
@@ -64,7 +64,7 @@ export default function CommandPalette() {
       cmd(t('jar.title'), () => A.openDialogBox({ type: 'jar' }), '', 'save');
       cmd(t('zip.export'), () => A.exportZip(), '', 'save');
       cmd(t('ws.reset'), A.stopProgram, '', 'reset');
-      if (!s.settings.aiOff) cmd(t('ai.write'), () => setState({ aiPrompt: { at: Date.now() } }), 'Strg+I', 'tutor');
+      if (!s.settings.aiOff) cmd(t('ai.write'), () => setState({ aiPrompt: { at: Date.now() } }), 'ctrl I', 'pencil');
       cmd(t('menu.readme'), A.openReadme, '', 'file');
       cmd(t('ws.reveal'), () => window.blackj.project.reveal(), '', 'folderOpen');
     }
@@ -87,7 +87,7 @@ export default function CommandPalette() {
     if (!onlyCmds && project) {
       for (const c of model.list) {
         const sc = score(query, c.simple) || score(query, c.fileClass);
-        if (sc) out.push({ kind: 'class', label: c.simple, hint: c.pkg || c.file, sc: sc + 20, icon: 'file', run: () => { if (c.pkg !== s.pkg) A.enterPackage(c.pkg); A.openClass(c.fileClass); setState({ selectedClass: c.fileClass }); } });
+        if (sc) out.push({ kind: 'class', label: c.simple, hint: c.pkg, sc: sc + 20, icon: 'file', run: () => { if (c.pkg !== s.pkg) A.enterPackage(c.pkg); A.openClass(c.fileClass); setState({ selectedClass: c.fileClass }); } });
         if (query.length >= 2) {
           for (const m of c.methods) {
             const ms = score(query, m.name);
@@ -136,7 +136,7 @@ export default function CommandPalette() {
             <button key={it.kind + it.label + i} className={'palette-item' + (i === sel ? ' sel' : '')} role="option" aria-selected={i === sel} onMouseEnter={() => setSel(i)} onClick={() => run(it)}>
               <Icon name={it.icon || 'file'} />
               <span className="pi-label">{it.label}</span>
-              <span className="pi-hint">{it.hint}</span>
+              {it.keys ? <kbd>{formatKeys(lang, it.keys)}</kbd> : <span className="pi-hint">{it.hint}</span>}
             </button>
           ))}
         </div>

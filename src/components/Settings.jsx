@@ -21,12 +21,11 @@ function Row({ title, desc, children, stack }) {
   );
 }
 
-function Section({ title, text, children }) {
+function Section({ title, children }) {
   return (
     <section className="set-section">
       <div className="set-label">
         <h2>{title}</h2>
-        <p>{text}</p>
       </div>
       <div className="card set-panel">{children}</div>
     </section>
@@ -62,7 +61,7 @@ export default function Settings() {
           </div>
         </div>
 
-        <Section title={t('settings.look')} text={t('settings.lookText')}>
+        <Section title={t('settings.look')}>
           <Row title={t('settings.lang')}>
             <Select value={s.lang} onChange={(v) => set({ lang: v })} aria-label={t('settings.lang')}>
               <option value="de">Deutsch</option>
@@ -85,20 +84,20 @@ export default function Settings() {
           </Row>
         </Section>
 
-        <Section title={t('settings.editor')} text={t('settings.editorText')}>
-          <Row title={t('settings.hoverHelp')} desc={t('settings.hoverHelpText')}>
+        <Section title={t('settings.editor')}>
+          <Row title={t('settings.hoverHelp')}>
             <Switch checked={s.hoverHelp} onChange={(v) => set({ hoverHelp: v })} label={t('settings.hoverHelp')} />
           </Row>
-          <Row title={t('settings.autosave')} desc={t('settings.autosaveText')}>
+          <Row title={t('settings.autosave')}>
             <Switch checked={s.autosave} onChange={(v) => set({ autosave: v })} label={t('settings.autosave')} />
           </Row>
-          <Row title={t('settings.details')} desc={t('settings.detailsText')}>
+          <Row title={t('settings.details')}>
             <Switch checked={s.diagramDetails} onChange={(v) => set({ diagramDetails: v })} label={t('settings.details')} />
           </Row>
           <Row title={t('settings.scopeColors')} desc={t('settings.scopeColorsText')}>
             <Switch checked={s.scopeColors} onChange={(v) => set({ scopeColors: v })} label={t('settings.scopeColors')} />
           </Row>
-          <Row title={t('settings.clearConsole')} desc={t('settings.clearConsoleText')}>
+          <Row title={t('settings.clearConsole')}>
             <Switch checked={!!s.clearConsoleOnCall} onChange={(v) => set({ clearConsoleOnCall: v })} label={t('settings.clearConsole')} />
           </Row>
           {!s.aiOff && (
@@ -108,7 +107,7 @@ export default function Settings() {
           )}
         </Section>
 
-        <Section title={t('settings.java')} text={t('settings.javaText')}>
+        <Section title={t('settings.java')}>
           <Row title={t('settings.javaCurrent')} desc={info.jdk ? `Java ${info.jdk.version} · ${info.jdk.source}` : t('home.javaMissing')}>
             <div className="action-row">
               {s.jdkPath && <button className="btn btn-sm btn-quiet" onClick={autoJdk}>{t('settings.javaAuto')}</button>}
@@ -132,7 +131,7 @@ export default function Settings() {
           </Row>
         </Section>
 
-        <Section title={t('settings.tutor')} text={t('settings.tutorText')}>
+        <Section title={t('settings.tutor')}>
           <Row title={t('settings.aiOff')} desc={t('settings.aiOffText')}>
             <Switch checked={!!s.aiOff} onChange={(v) => set({ aiOff: v })} label={t('settings.aiOff')} />
           </Row>
@@ -157,7 +156,7 @@ export default function Settings() {
                       }
                     }}
                   >
-                    <input className="input mono" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={t('tutor.keyPlaceholder')} aria-label={t('settings.key')} autoComplete="off" />
+                    <input className="input" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={t('tutor.keyPlaceholder')} aria-label={t('settings.key')} autoComplete="off" />
                     <button className="btn btn-primary" type="submit" disabled={!key.trim()}>{t('tutor.keySave')}</button>
                   </form>
                 )}
@@ -180,18 +179,18 @@ export default function Settings() {
                   ))}
                 </div>
               </Row>
-              <Row title={t('settings.sendContext')} desc={t('settings.sendContextText')}>
+              <Row title={t('settings.sendContext')}>
                 <Switch checked={s.sendContext} onChange={(v) => set({ sendContext: v })} label={t('settings.sendContext')} />
               </Row>
-              <Row title={t('settings.showCosts')} desc={t('settings.showCostsText')}>
+              <Row title={t('settings.showCosts')}>
                 <Switch checked={s.showCosts} onChange={(v) => set({ showCosts: v })} label={t('settings.showCosts')} />
               </Row>
             </>
           )}
         </Section>
 
-        <Section title={t('settings.about')} text={t('settings.aboutText', { version: info.version })}>
-          <Row title="BlackJ" desc={`Version ${info.version}`}>
+        <Section title={t('settings.about')}>
+          <Row title={`BlackJ ${info.version}`} desc={t('settings.aboutText')}>
             <button className="btn btn-sm btn-quiet" onClick={() => api.openExternal('https://www.bluej.org')}>
               bluej.org
               <Icon name="external" />

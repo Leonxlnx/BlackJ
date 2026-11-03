@@ -76,7 +76,7 @@ function Setup() {
       <p>{t('tutor.setupText')}</p>
       <label className="field">
         <span className="field-label">{t('tutor.keyLabel')}</span>
-        <input className="input mono" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={t('tutor.keyPlaceholder')} autoComplete="off" spellCheck="false" />
+        <input className="input" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={t('tutor.keyPlaceholder')} autoComplete="off" spellCheck="false" />
       </label>
       {canStore && (
         <label className="check">
@@ -102,7 +102,6 @@ function Turn({ turn, t, lang, showCosts, last }) {
   if (turn.role === 'user') {
     return (
       <div className="msg-user">
-        <div className="msg-who">{t('tutor.you')}</div>
         <div className="bubble">{turn.text}</div>
         {turn.ctx && <div className="msg-ctx">{t('tutor.context', { file: turn.ctx })}</div>}
       </div>
@@ -111,7 +110,7 @@ function Turn({ turn, t, lang, showCosts, last }) {
   const busy = turn.status === 'waiting' || turn.status === 'thinking';
   return (
     <div className="msg-ai">
-      <div className="msg-who">{t('tutor.title')}{busy && <span>· {t('tutor.thinking')}</span>}</div>
+      {busy && !turn.text && <div className="msg-meta">{t('tutor.thinking')}</div>}
       {turn.text && <Markdown text={turn.text + (turn.status === 'writing' ? '' : '')} final={turn.status === 'done'} t={t} />}
       {turn.status === 'writing' && <span className="cursor-blink" aria-hidden="true" />}
       {turn.status === 'aborted' && <div className="msg-meta">{t('tutor.aborted')}</div>}
@@ -160,6 +159,7 @@ export default function Tutor() {
 
   return (
     <div className="side-body tutor">
+      {hasKey && (
       <div className="tutor-sub">
         <div className="seg" role="group" aria-label="Modus">
           {['hints', 'explain'].map((m) => (
@@ -167,10 +167,10 @@ export default function Tutor() {
           ))}
         </div>
         <button className="btn btn-sm btn-quiet" onClick={A.newChat} disabled={!chat.turns.length}>
-          <Icon name="plus" />
           {t('tutor.newChat')}
         </button>
       </div>
+      )}
       {!hasKey ? (
         <div className="chat">
           <Setup />
@@ -199,37 +199,37 @@ export default function Tutor() {
               send();
             }}
           >
-            <textarea
-              className="textarea"
-              rows={Math.min(6, Math.max(2, text.split('\n').length))}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              placeholder={t('tutor.placeholder')}
-              aria-label={t('tutor.placeholder')}
-            />
+            <div className="composer-box">
+              <textarea
+                className="textarea"
+                rows={Math.min(6, Math.max(2, text.split('\n').length))}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+                placeholder={t('tutor.placeholder')}
+                aria-label={t('tutor.placeholder')}
+              />
+              {chat.busy ? (
+                <button type="button" className="send-btn stop" onClick={A.stopTutor} aria-label={t('tutor.stop')} title={t('tutor.stop')}>
+                  <Icon name="stop" />
+                </button>
+              ) : (
+                <button type="submit" className="send-btn" disabled={!text.trim()} aria-label={t('tutor.send')} title={t('tutor.send')}>
+                  <Icon name="arrowUp" />
+                </button>
+              )}
+            </div>
             <div className="composer-row">
               <button type="button" className="ctx-toggle" aria-pressed={settings.sendContext} onClick={() => A.updateSettings({ sendContext: !settings.sendContext })}>
                 <span className="box" />
                 {settings.sendContext && activeTab ? t('tutor.context', { file: activeTab }) : t('tutor.contextOff')}
               </button>
-              <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>{model ? model.label.replace('Claude ', '') : ''}</span>
-              {chat.busy ? (
-                <button type="button" className="btn btn-sm" onClick={A.stopTutor}>
-                  <Icon name="stop" />
-                  {t('tutor.stop')}
-                </button>
-              ) : (
-                <button type="submit" className="btn btn-sm btn-primary" disabled={!text.trim()}>
-                  <Icon name="send" />
-                  {t('tutor.send')}
-                </button>
-              )}
+              <span className="composer-model">{model ? model.label.replace('Claude ', '') : ''}</span>
             </div>
           </form>
         </>

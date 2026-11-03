@@ -1,12 +1,12 @@
 import { useStore, setState } from '../store.js';
-import { useT } from '../i18n.js';
+import { useT, formatKeys } from '../i18n.js';
 import Icon from './Icon.jsx';
 
 const GROUPS = [
-  ['shortcuts.general', [['Strg P', 'shortcuts.palette'], ['Strg Umschalt P', 'shortcuts.commands'], ['F1', 'shortcuts.help'], ['Strg Umschalt L', 'shortcuts.side']]],
-  ['shortcuts.project', [['Strg K', 'ws.compile'], ['F5', 'ws.runMain'], ['Strg N', 'ws.newClass'], ['Strg S', 'editor.save']]],
-  ['shortcuts.editor', [['Strg I', 'ai.write'], ['Tab', 'shortcuts.acceptAi'], ['Strg Leertaste', 'shortcuts.suggest'], ['Umschalt Alt F', 'editor.format'], ['Strg F', 'shortcuts.find'], ['Strg #', 'shortcuts.comment']]],
-  ['shortcuts.debug', [['F9', 'debug.breakpoint'], ['F8', 'debug.continue'], ['F10', 'debug.over'], ['F11', 'debug.into'], ['Umschalt F11', 'debug.out']]],
+  ['shortcuts.general', [['ctrl P', 'shortcuts.palette'], ['ctrl shift P', 'shortcuts.commands'], ['F1', 'shortcuts.help'], ['ctrl shift L', 'shortcuts.side']]],
+  ['shortcuts.project', [['ctrl K', 'ws.compile'], ['F5', 'ws.runMain'], ['ctrl N', 'ws.newClass'], ['ctrl S', 'editor.save']]],
+  ['shortcuts.editor', [['ctrl I', 'ai.write'], ['Tab', 'shortcuts.acceptAi'], ['ctrl space', 'shortcuts.suggest'], ['shift Alt F', 'editor.format'], ['ctrl H', 'shortcuts.find'], ['ctrl #', 'shortcuts.comment']]],
+  ['shortcuts.debug', [['F9', 'debug.breakpoint'], ['F8', 'debug.continue'], ['F10', 'debug.over'], ['F11', 'debug.into'], ['shift F11', 'debug.out']]],
 ];
 
 /** F1: every keyboard shortcut on one card. */
@@ -14,7 +14,6 @@ export default function ShortcutsDialog() {
   const t = useT();
   const open = useStore((s) => s.shortcuts);
   const lang = useStore((s) => s.settings.lang);
-  const keyName = (k) => (lang === 'en' ? { Strg: 'Ctrl', Umschalt: 'Shift', Leertaste: 'Space' }[k] || k : k);
   if (!open) return null;
   const close = () => setState({ shortcuts: false });
   return (
@@ -35,7 +34,7 @@ export default function ShortcutsDialog() {
               {rows.map(([keys, label]) => (
                 <div className="sc-row" key={label}>
                   <span>{t(label)}</span>
-                  <span className="sc-keys">{keys.split(' ').map((k) => <kbd key={k}>{keyName(k)}</kbd>)}</span>
+                  <span className="sc-keys"><kbd>{formatKeys(lang, keys)}</kbd></span>
                 </div>
               ))}
             </section>

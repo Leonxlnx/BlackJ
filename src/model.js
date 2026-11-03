@@ -94,7 +94,7 @@ export function childPackages(model, pkg) {
  * Layered positions for the classes and sub-packages of one package that have none yet:
  * superclasses on top, their subclasses centred underneath, programs at the end of the first row.
  */
-export function autoLayout(model, positions, pkg = '', pitchX = 236, pitchY = 300) {
+export function autoLayout(model, positions, pkg = '', pitchX = 272, pitchY = 300) {
   const inPkg = model.list.filter((c) => c.pkg === pkg).map((c) => c.fileClass);
   const parentOf = (c) => (model.byName[c]?.parents || []).filter((p) => inPkg.includes(p));
   const depth = {};
@@ -159,6 +159,91 @@ export function autoLayout(model, positions, pkg = '', pitchX = 236, pitchY = 30
     }
   }
   return next;
+}
+
+/**
+ * The diagram's own layout while the user has not moved cards in a package: the same layers as
+ * autoLayout (superclasses above their subclasses), packed with the measured card sizes into rows
+ * no wider than maxW. Classes without subclasses that do not fit on the first row move below the
+ * inheritance tree instead of growing the diagram to the right.
+ */
+export function flowLayout(model, keys, size, maxW, gapX = 40, gapY = 56) {
+  const left = 32;
+  const right = left + maxW;
+  const pkgKeys = keys.filter((k) => k.startsWith('pkg:'));
+  const inPkg = keys.filter((k) => !k.startsWith('pkg:'));
+  const parentOf = (c) => (model.byName[c]?.parents || []).filter((p) => inPkg.includes(p));
+  const depth = {};
+  const d = (c, guard = 0) => {
+    if (depth[c] != null) return depth[c];
+    if (guard > 20) return 0;
+    const ps = parentOf(c);
+    depth[c] = ps.length ? Math.max(...ps.map((p) => d(p, guard + 1))) + 1 : 0;
+    return depth[c];
+  };
+  for (const c of inPkg) d(c);
+  const hasChildren = new Set(inPkg.flatMap(parentOf));
+  const out = {};
+  let y = 32;
+  // One layer: items in order, wrapping onto new lines at the right edge. A group (the subclasses
+  // of one parent) starts centred under its parent when it fits there.
+  const layer = (groups) => {
+    let x = left;
+    let lineH = 0;
+    let any = false;
+    for (const g of groups) {
+      const gw = g.items.reduce((s, k) => s + size(k).w, 0) + gapX * (g.items.length - 1);
+      if (g.under != null) {
+        const want = Math.max(left, Math.round(g.under - gw / 2));
+        if (want >= x && want + gw <= right) x = want;
+      }
+      for (const k of g.items) {
+        const s = size(k);
+        if (x > left && x + s.w > right) {
+          y += lineH + gapY;
+          x = left;
+          lineH = 0;
+        }
+        out[k] = { x, y };
+        x += s.w + gapX;
+        lineH = Math.max(lineH, s.h);
+        any = true;
+      }
+    }
+    if (any) y += lineH + gapY;
+  };
+  if (pkgKeys.length) layer([{ items: [...pkgKeys].sort() }]);
+  const maxDepth = Math.max(0, ...inPkg.map((c) => depth[c]));
+  const rank = (c) => (hasChildren.has(c) ? 0 : model.byName[c]?.isTest ? 3 : model.byName[c]?.hasMain ? 2 : 1);
+  const first = inPkg.filter((c) => depth[c] === 0).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  const deferred = [];
+  if (maxDepth > 0) {
+    // The first row keeps the parents and as many other classes as fit next to them.
+    const row = [];
+    let x = left;
+    for (const c of first) {
+      const w = size(c).w;
+      if (hasChildren.has(c) || x + w <= right) {
+        row.push(c);
+        x += w + gapX;
+      } else deferred.push(c);
+    }
+    layer([{ items: row }]);
+  } else layer([{ items: first }]);
+  for (let r = 1; r <= maxDepth; r++) {
+    const groups = new Map();
+    for (const c of inPkg.filter((k) => depth[k] === r)) {
+      const p = parentOf(c).find((q) => depth[q] === r - 1) || parentOf(c)[0];
+      if (!groups.has(p)) groups.set(p, []);
+      groups.get(p).push(c);
+    }
+    const ordered = [...groups.entries()]
+      .map(([p, items]) => ({ items: items.sort((a, b) => a.localeCompare(b)), under: out[p] ? out[p].x + size(p).w / 2 : null, px: out[p] ? out[p].x + out[p].y * 10000 : 0 }))
+      .sort((a, b) => a.px - b.px);
+    layer(ordered);
+  }
+  if (deferred.length) layer([{ items: deferred }]);
+  return out;
 }
 
 /** autoLayout for every package of the project. */

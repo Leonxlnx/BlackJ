@@ -281,6 +281,7 @@ function registerIpc() {
       jdks,
       examples: fs.existsSync(examplesDir) ? fs.readdirSync(examplesDir).filter((n) => fs.statSync(path.join(examplesDir, n)).isDirectory()) : [],
       exercises: listExercises(),
+      projectsDir: projectsHome(),
       tutor: tutor.status(),
       smoke: !!smokeDir,
       platform: process.platform,
@@ -572,8 +573,8 @@ function registerIpc() {
     if (!win || process.platform !== 'win32') return;
     const dark = theme !== 'light';
     try {
-      win.setTitleBarOverlay({ color: dark ? '#0e0e10' : '#eef0f3', symbolColor: dark ? '#bdbdc0' : '#3d3f43', height: 40 });
-      win.setBackgroundColor(dark ? '#0e0e10' : '#eef0f3');
+      win.setTitleBarOverlay({ color: dark ? '#0a0a0b' : '#ebebed', symbolColor: dark ? '#adadb3' : '#4d4d55', height: 44 });
+      win.setBackgroundColor(dark ? '#0a0a0b' : '#ebebed');
     } catch { /* overlay not available */ }
   });
 
@@ -659,15 +660,15 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 640,
     show: false,
-    backgroundColor: settings.get().theme === 'light' ? '#eef0f3' : '#0e0e10',
+    backgroundColor: settings.get().theme === 'light' ? '#ebebed' : '#0a0a0b',
     title: 'BlackJ',
     // Windows draws the taskbar button from the .ico, which has every size on its own grid.
     icon: path.join(resDir, process.platform === 'win32' && fs.existsSync(path.join(resDir, 'icon.ico')) ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
     titleBarOverlay: settings.get().theme === 'light'
-      ? { color: '#eef0f3', symbolColor: '#3d3f43', height: 40 }
-      : { color: '#0e0e10', symbolColor: '#bdbdc0', height: 40 },
+      ? { color: '#ebebed', symbolColor: '#4d4d55', height: 44 }
+      : { color: '#0a0a0b', symbolColor: '#adadb3', height: 44 },
     skipTaskbar: !!smokeDir,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

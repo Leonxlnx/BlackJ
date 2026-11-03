@@ -33,9 +33,9 @@ function Result({ e, t, lang }) {
           const [message, ...details] = d.message.split('\n').map((x) => x.trim());
           const ex = explainProblem({ message, details }, lang);
           return (
-            <div key={i}>
-              <strong>{ex.title}</strong> <span className="muted">{ex.fix}</span>
-              <div className="mono muted">{d.message.replace(/\n\s*/g, ' · ')}</div>
+            <div key={i} title={ex.fix + '\n' + d.message.replace(/\n\s*/g, ' · ')}>
+              <strong>{ex.title}</strong>
+              <span className="fix">{ex.fix}</span>
             </div>
           );
         })}
@@ -87,7 +87,7 @@ export default function CodePad() {
               <p>{t('pad.empty')}</p>
               <div className="pad-examples">
                 {['1 + 2 * 3', '"Hallo".length()', 'Math.sqrt(16)', ...(objects[0] ? [`${objects[0].name}.toString()`] : [])].map((ex) => (
-                  <button key={ex} className="pad-example mono" onClick={() => { setCode(ex); inputRef.current && inputRef.current.focus(); }}>{ex}</button>
+                  <button key={ex} className="pad-example" onClick={() => { setCode(ex); inputRef.current && inputRef.current.focus(); }}>{ex}</button>
                 ))}
               </div>
             </div>
@@ -129,7 +129,7 @@ export default function CodePad() {
             }}
             aria-label={t('pad.title')}
           />
-          <button className="btn btn-sm btn-primary" onClick={run} disabled={!code.trim() || pad.busy}>
+          <button className="btn btn-sm" onClick={run} disabled={!code.trim() || pad.busy}>
             <Icon name="play" />
             {t('pad.run')}
           </button>
@@ -138,20 +138,20 @@ export default function CodePad() {
       <aside className="pad-vars">
         <div className="pad-vars-head">
           <span>{t('pad.vars')}</span>
-          {(pad.entries.length > 0 || pad.vars.length > 0) && <button className="link" onClick={A.padReset}>{t('pad.reset')}</button>}
+          {(pad.entries.length > 0 || pad.vars.length > 0) && <button className="btn btn-sm btn-quiet" onClick={A.padReset}>{t('pad.reset')}</button>}
         </div>
         {pad.vars.length === 0 && objects.length === 0 && <p className="muted">{t('pad.noVars')}</p>}
         {pad.vars.map((v) => (
           <div key={v.name} className="pad-var">
-            <span className="mono">{v.name}</span>
+            <span className="pad-var-name">{v.name}</span>
             <span className="pad-type">{v.type}</span>
-            <span className="pad-var-val mono">{valueText(v.value)}</span>
+            <span className="pad-var-val mono" title={valueText(v.value)}>{valueText(v.value)}</span>
           </div>
         ))}
         {objects.length > 0 && <div className="pad-vars-sub">{t('pad.benchVars')}</div>}
         {objects.map((o) => (
           <div key={o.name} className="pad-var">
-            <span className="mono">{o.name}</span>
+            <span className="pad-var-name">{o.name}</span>
             <span className="pad-type">{o.type}</span>
           </div>
         ))}

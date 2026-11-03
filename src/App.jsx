@@ -139,7 +139,7 @@ export default function App() {
         </div>
       )}
       {toast && (
-        <div className={'toast' + (toast.kind === 'bad' ? ' bad' : '')} role="status" key={toast.id}>
+        <div className={'toast' + (toast.kind === 'bad' ? ' bad' : '') + (current !== 'project' ? ' on-page' : '')} role="status" key={toast.id}>
           {toast.text}
         </div>
       )}
