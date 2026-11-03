@@ -37,7 +37,8 @@ export function defineThemes() {
   };
   for (const [name, def] of Object.entries(base)) {
     const isDark = name === 'dark';
-    const ground = isDark ? '#131217' : '#ffffff';
+    // Same as --surface, so the editor sits flush in its panel.
+    const ground = isDark ? '#17171a' : '#ffffff';
     monaco.editor.defineTheme('blackj-' + name, {
       base: def.base,
       inherit: true,
@@ -47,7 +48,7 @@ export function defineThemes() {
         'editor.foreground': isDark ? '#f2f2f3' : '#111111',
         'editorLineNumber.foreground': isDark ? '#5c5e64' : '#9a9ca1',
         'editorLineNumber.activeForeground': isDark ? '#bdbdc0' : '#111111',
-        'editor.lineHighlightBackground': isDark ? '#1b1a1f' : '#f6f7f8',
+        'editor.lineHighlightBackground': isDark ? '#1d1d21' : '#f6f7f8',
         'editor.lineHighlightBorder': '#00000000',
         'editor.selectionBackground': isDark ? '#3a3a3e' : '#d7dce2',
         'editorCursor.foreground': isDark ? '#e8913a' : '#b0540a',

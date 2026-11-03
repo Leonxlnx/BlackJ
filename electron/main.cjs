@@ -572,8 +572,8 @@ function registerIpc() {
     if (!win || process.platform !== 'win32') return;
     const dark = theme !== 'light';
     try {
-      win.setTitleBarOverlay({ color: dark ? '#171719' : '#f9fafb', symbolColor: dark ? '#bdbdc0' : '#3d3f43', height: 40 });
-      win.setBackgroundColor(dark ? '#171719' : '#f9fafb');
+      win.setTitleBarOverlay({ color: dark ? '#0e0e10' : '#eef0f3', symbolColor: dark ? '#bdbdc0' : '#3d3f43', height: 40 });
+      win.setBackgroundColor(dark ? '#0e0e10' : '#eef0f3');
     } catch { /* overlay not available */ }
   });
 
@@ -659,15 +659,15 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 640,
     show: false,
-    backgroundColor: settings.get().theme === 'light' ? '#f9fafb' : '#171719',
+    backgroundColor: settings.get().theme === 'light' ? '#eef0f3' : '#0e0e10',
     title: 'BlackJ',
     // Windows draws the taskbar button from the .ico, which has every size on its own grid.
     icon: path.join(resDir, process.platform === 'win32' && fs.existsSync(path.join(resDir, 'icon.ico')) ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: true,
     titleBarStyle: 'hidden',
     titleBarOverlay: settings.get().theme === 'light'
-      ? { color: '#f9fafb', symbolColor: '#3d3f43', height: 40 }
-      : { color: '#171719', symbolColor: '#bdbdc0', height: 40 },
+      ? { color: '#eef0f3', symbolColor: '#3d3f43', height: 40 }
+      : { color: '#0e0e10', symbolColor: '#bdbdc0', height: 40 },
     skipTaskbar: !!smokeDir,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

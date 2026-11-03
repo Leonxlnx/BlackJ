@@ -35,7 +35,7 @@ export async function runSmoke() {
   const method = (desc, name) => desc.methods.find((m) => m.name === name);
 
   await step('home renders', async () => {
-    await until(() => document.querySelector('.home-grid'));
+    await until(() => document.querySelector('.home-hero'));
     await shot('01-home');
   });
   let tiereDir = null;
@@ -395,8 +395,11 @@ export async function runSmoke() {
   });
   await step('home with recent projects', async () => {
     A.go('home');
-    await until(() => document.querySelectorAll('.recent-row').length >= 2);
+    await until(() => document.querySelectorAll('.recent-tile').length >= 2);
     await shot('21-home-recent');
+    await A.updateSettings({ theme: 'light' });
+    await shot('21b-home-light');
+    await A.updateSettings({ theme: 'dark' });
     await api.smoke.resize({ width: 1024, height: 680 });
     await shot('22-home-small');
     await api.smoke.resize({ width: 1440, height: 860 });
