@@ -27,7 +27,7 @@ export default function TitleBar() {
   return (
     <header className="titlebar">
       <div className="tb-left">
-        <Mark className="tb-mark" />
+        <Mark className={'tb-mark' + (compileState === 'compiling' || running ? ' busy' : '')} />
         {inProject ? (
           <nav className="crumbs-bar" aria-label="Pfad">
             <h1 className="tb-title">

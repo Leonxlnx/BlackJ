@@ -55,11 +55,12 @@ export default function Icon({ name, ...rest }) {
 }
 
 /** The BlackJ mark: a coffee bean, for Java. */
+/** The BlackJ mark: a J being typed, the text cursor right after it. */
 export function Mark(props) {
   return (
     <svg viewBox="0 0 32 32" aria-hidden="true" {...props}>
-      <ellipse cx="16" cy="16" rx="9.5" ry="13" transform="rotate(32 16 16)" fill="currentColor" />
-      <path d="M10.2 25.4c3.6-2.6 2.1-6.9 5.5-9.6 3.4-2.7 4.4-6.8 6.1-9.2" fill="none" stroke="var(--ground)" strokeWidth="2.2" strokeLinecap="round" />
+      <path d="M19.6 5.5V18.2a6.1 6.1 0 0 1-12.2 0" fill="none" stroke="currentColor" strokeWidth="4.4" />
+      <rect className="mark-caret" x="24.2" y="5.5" width="2.8" height="20.8" fill="var(--accent)" />
     </svg>
   );
 }
