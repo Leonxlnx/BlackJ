@@ -25,6 +25,10 @@
 <td><img src="docs/screenshots/light.png" alt="Helles Design"><br><sub>Helles und dunkles Design</sub></td>
 <td><img src="docs/screenshots/completion.png" alt="Autovervollständigung für String"><br><sub>Vervollständigung passend zum Typ, auch für String, Scanner, ArrayList</sub></td>
 </tr>
+<tr>
+<td><img src="docs/screenshots/exercises.png" alt="Übungen mit Tests"><br><sub>Übungen mit Tests: alle grün heißt geschafft</sub></td>
+<td><img src="docs/screenshots/parameter-hints.png" alt="Parameter-Hinweise"><br><sub>Parameter-Hinweise mit Erklärung beim Tippen</sub></td>
+</tr>
 </table>
 
 ---
