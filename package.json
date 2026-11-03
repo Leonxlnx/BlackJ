@@ -1,7 +1,7 @@
 {
   "name": "blackj",
   "productName": "BlackJ",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "BlackJ – Java lernen mit Klassendiagramm, Live-Objekten und KI-Tutor",
   "main": "electron/main.cjs",
   "private": true,
@@ -18,6 +18,7 @@
     "test:junit": "node scripts/test-junit.cjs",
     "test:debugger": "node scripts/test-debugger.cjs",
     "test:zip": "node scripts/test-zip.cjs",
+    "gen:jdkapi": "java scripts/GenJdkApi.java",
     "test": "npm run build:bench && node scripts/test-bench.cjs && node scripts/test-ai.cjs && node scripts/test-junit.cjs && node scripts/test-debugger.cjs && node scripts/test-zip.cjs",
     "fetch:junit": "node scripts/fetch-junit.cjs",
     "dist": "npm run build && node scripts/dist.cjs"

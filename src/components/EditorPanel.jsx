@@ -9,6 +9,7 @@ import { reindent } from '../lib/format.js';
 import { explainProblem } from '../lib/errors.js';
 import { explainException } from '../lib/exceptions.js';
 import { scopeRanges } from '../lib/javaParse.js';
+import { receiverOf, resolveReceiver, libMembers, projectMembers } from '../lib/completion.js';
 import { infoFor } from '../model.js';
 import Icon from './Icon.jsx';
 import DocsView from './DocsView.jsx';
@@ -27,12 +28,21 @@ function registerProviders() {
       if (!s.settings.hoverHelp) return null;
       const word = model.getWordAtPosition(position);
       if (!word) return null;
+      const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
       const entry = KEYWORDS[word.word];
-      if (!entry) return null;
-      return {
-        range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
-        contents: [{ value: `**${word.word}** — ${entry[s.settings.lang] || entry.de}` }],
-      };
+      if (entry) return { range, contents: [{ value: `**${word.word}** — ${entry[s.settings.lang] || entry.de}` }] };
+      // A library method or constant after a dot: its signatures and a short explanation.
+      const before = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);
+      if (!/\.\s*$/.test(before)) return null;
+      const projectModel = A.modelOf(s.files);
+      const cur = projectModel.list.find((c) => c.file === s.activeTab) || null;
+      const recv = resolveReceiver(model.getValue(), model.getOffsetAt(position), receiverOf(before), projectModel, cur);
+      if (!recv || recv.kind !== 'lib') return null;
+      const hits = libMembers(recv.cls, recv.statics, recv.args, s.settings.lang).filter((m) => m.name === word.word);
+      if (!hits.length) return null;
+      const sigs = hits.slice(0, 6).map((m) => (m.field ? `${m.ret} ${recv.cls}.${m.name}` : `${m.ret} ${m.name}(${m.params.join(', ')})`)).join('\n');
+      const doc = hits.find((m) => m.doc);
+      return { range, contents: [{ value: '```java\n' + sigs + (hits.length > 6 ? '\n…' : '') + '\n```' }, ...(doc ? [{ value: doc.doc }] : [])] };
     },
   });
 
@@ -105,6 +115,9 @@ function registerProviders() {
       const K = monaco.languages.CompletionItemKind;
       const items = [];
       if (/\.\s*$/.test(lineBefore)) {
+        const cur = projectModel.list.find((c) => c.file === s.activeTab) || null;
+        const recv = resolveReceiver(model.getValue(), model.getOffsetAt(position), receiverOf(lineBefore), projectModel, cur);
+        if (recv) return { suggestions: memberSuggestions(recv, projectModel, cur, s.settings.lang, range) };
         for (const c of projectModel.list) {
           for (const m of c.methods) {
             if (m.visibility === 'private') continue;
@@ -120,6 +133,47 @@ function registerProviders() {
       return { suggestions: items };
     },
   });
+}
+
+/** Completion items for the members of a resolved receiver (see lib/completion.js). */
+function memberSuggestions(recv, projectModel, cur, lang, range) {
+  const K = monaco.languages.CompletionItemKind;
+  const Snippet = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+  const de = lang !== 'en';
+  if (recv.kind === 'array') {
+    return [{ label: 'length', kind: K.Field, detail: 'int', documentation: de ? 'Anzahl der Elemente im Array (ohne Klammern).' : 'Number of elements in the array (no parentheses).', insertText: 'length', range }];
+  }
+  const owner = recv.kind === 'lib' ? recv.cls : recv.cls.simple;
+  const members = recv.kind === 'lib'
+    ? libMembers(recv.cls, recv.statics, recv.args, lang)
+    : projectMembers(projectModel, recv.cls, recv.statics, !!cur && cur.fileClass === recv.cls.fileClass);
+  const byName = new Map();
+  for (const m of members) {
+    const k = (m.field ? 'f:' : 'm:') + m.name;
+    if (!byName.has(k)) byName.set(k, []);
+    byName.get(k).push(m);
+  }
+  const items = [];
+  for (const list of byName.values()) {
+    const m = list[0];
+    const doc = (list.find((x) => x.doc) || {}).doc || undefined;
+    const sortText = (doc && recv.kind === 'lib' ? '0' : '1') + m.name;
+    if (m.field) {
+      items.push({ label: m.name, kind: m.isStatic ? K.Constant : K.Field, detail: `${m.ret} · ${m.owner || owner}`, documentation: doc, insertText: m.name, sortText, range });
+      continue;
+    }
+    // Many overloads (println, valueOf, append …) become one entry that lists them all.
+    if (list.length > 3) {
+      const sigs = list.map((x) => `${x.name}(${x.params.join(', ')})`).join('\n');
+      items.push({ label: `${m.name}(…)`, filterText: m.name, kind: K.Method, detail: `${m.ret} · ${de ? `${list.length} Varianten` : `${list.length} variants`}`, documentation: { value: (doc ? doc + '\n\n' : '') + '```java\n' + sigs + '\n```' }, insertText: `${m.name}($1)`, insertTextRules: Snippet, sortText, range });
+      continue;
+    }
+    for (const x of list) {
+      const holes = x.params.map((p, i) => `\${${i + 1}:${(x.names && x.names[i]) || p.replace(/<.*>/, '').replace(/[^\w]/g, '') || 'wert'}}`);
+      items.push({ label: `${x.name}(${x.params.join(', ')})`, filterText: x.name, kind: K.Method, detail: `${x.ret} · ${x.owner || owner}`, documentation: x.doc || doc, insertText: `${x.name}(${holes.join(', ')})`, insertTextRules: Snippet, sortText, range });
+    }
+  }
+  return items;
 }
 
 const models = new Map();

@@ -136,56 +136,58 @@ export default function Settings() {
           <Row title={t('settings.aiOff')} desc={t('settings.aiOffText')}>
             <Switch checked={!!s.aiOff} onChange={(v) => set({ aiOff: v })} label={t('settings.aiOff')} />
           </Row>
-          {!s.aiOff && <>
-          <Row title={t('settings.key')} desc={tutor.hasKey ? (tutor.stored ? t('settings.keyStored') : t('settings.keySession')) : t('settings.keyNone')} stack={!tutor.hasKey || replacing}>
-            {tutor.hasKey && !replacing ? (
-              <div className="action-row">
-                <button className="btn btn-sm btn-quiet" onClick={() => setReplacing(true)}>{t('settings.keyReplace')}</button>
-                <button className="btn btn-sm btn-danger" onClick={A.forgetApiKey}>{t('settings.keyForget')}</button>
-              </div>
-            ) : (
-              <form
-                className="key-row"
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  const err = await A.setApiKey(key, s.rememberKey && tutor.canStore);
-                  if (err) setKeyError(err);
-                  else {
-                    setKey('');
-                    setReplacing(false);
-                  }
-                }}
-              >
-                <input className="input mono" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={t('tutor.keyPlaceholder')} aria-label={t('settings.key')} autoComplete="off" />
-                <button className="btn btn-primary" type="submit" disabled={!key.trim()}>{t('tutor.keySave')}</button>
-              </form>
-            )}
-            {keyError && <div className="field-error">{keyError}</div>}
-          </Row>
-          {tutor.canStore && (
-            <Row title={t('tutor.keyRemember')} desc={t('tutor.keyRememberHint')}>
-              <Switch checked={s.rememberKey} onChange={(v) => set({ rememberKey: v })} label={t('tutor.keyRemember')} />
-            </Row>
+          {!s.aiOff && (
+            <>
+              <Row title={t('settings.key')} desc={tutor.hasKey ? (tutor.stored ? t('settings.keyStored') : t('settings.keySession')) : t('settings.keyNone')} stack={!tutor.hasKey || replacing}>
+                {tutor.hasKey && !replacing ? (
+                  <div className="action-row">
+                    <button className="btn btn-sm btn-quiet" onClick={() => setReplacing(true)}>{t('settings.keyReplace')}</button>
+                    <button className="btn btn-sm btn-danger" onClick={A.forgetApiKey}>{t('settings.keyForget')}</button>
+                  </div>
+                ) : (
+                  <form
+                    className="key-row"
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const err = await A.setApiKey(key, s.rememberKey && tutor.canStore);
+                      if (err) setKeyError(err);
+                      else {
+                        setKey('');
+                        setReplacing(false);
+                      }
+                    }}
+                  >
+                    <input className="input mono" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={t('tutor.keyPlaceholder')} aria-label={t('settings.key')} autoComplete="off" />
+                    <button className="btn btn-primary" type="submit" disabled={!key.trim()}>{t('tutor.keySave')}</button>
+                  </form>
+                )}
+                {keyError && <div className="field-error">{keyError}</div>}
+              </Row>
+              {tutor.canStore && (
+                <Row title={t('tutor.keyRemember')} desc={t('tutor.keyRememberHint')}>
+                  <Switch checked={s.rememberKey} onChange={(v) => set({ rememberKey: v })} label={t('tutor.keyRemember')} />
+                </Row>
+              )}
+              <Row title={t('settings.model')} desc={(() => { const m = tutor.models.find((x) => x.id === s.model); return m ? t('settings.modelPrice', { input: m.input, output: m.output }) : ''; })()}>
+                <Select value={s.model} onChange={(v) => set({ model: v })} aria-label={t('settings.model')}>
+                  {tutor.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                </Select>
+              </Row>
+              <Row title={t('settings.mode')}>
+                <div className="seg">
+                  {['hints', 'explain'].map((v) => (
+                    <button key={v} aria-pressed={s.tutorMode === v} onClick={() => set({ tutorMode: v })}>{t('tutor.mode.' + v)}</button>
+                  ))}
+                </div>
+              </Row>
+              <Row title={t('settings.sendContext')} desc={t('settings.sendContextText')}>
+                <Switch checked={s.sendContext} onChange={(v) => set({ sendContext: v })} label={t('settings.sendContext')} />
+              </Row>
+              <Row title={t('settings.showCosts')} desc={t('settings.showCostsText')}>
+                <Switch checked={s.showCosts} onChange={(v) => set({ showCosts: v })} label={t('settings.showCosts')} />
+              </Row>
+            </>
           )}
-          <Row title={t('settings.model')} desc={(() => { const m = tutor.models.find((x) => x.id === s.model); return m ? t('settings.modelPrice', { input: m.input, output: m.output }) : ''; })()}>
-            <Select value={s.model} onChange={(v) => set({ model: v })} aria-label={t('settings.model')}>
-              {tutor.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-            </Select>
-          </Row>
-          <Row title={t('settings.mode')}>
-            <div className="seg">
-              {['hints', 'explain'].map((v) => (
-                <button key={v} aria-pressed={s.tutorMode === v} onClick={() => set({ tutorMode: v })}>{t('tutor.mode.' + v)}</button>
-              ))}
-            </div>
-          </Row>
-          <Row title={t('settings.sendContext')} desc={t('settings.sendContextText')}>
-            <Switch checked={s.sendContext} onChange={(v) => set({ sendContext: v })} label={t('settings.sendContext')} />
-          </Row>
-          <Row title={t('settings.showCosts')} desc={t('settings.showCostsText')}>
-            <Switch checked={s.showCosts} onChange={(v) => set({ showCosts: v })} label={t('settings.showCosts')} />
-          </Row>
-          </>}
         </Section>
 
         <Section title={t('settings.about')} text={t('settings.aboutText', { version: info.version })}>

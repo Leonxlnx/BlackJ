@@ -250,4 +250,4 @@ function createProject(parent, name) {
   return dir;
 }
 
-module.exports = { open, writeFile, renameFile, createClass, createPackage, addFile, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, freeDir, projectRoot, archiveFiles, IDENT };
+module.exports = { open, writeFile, renameFile, createClass, createPackage, addFile, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, freeDir, projectRoot, archiveFiles, IDENT, SKIP_DIRS };

@@ -189,7 +189,8 @@ button.sb-item:hover { background: var(--raised); color: var(--text); }
   box-shadow: var(--float-shadow); transition: opacity 0.12s;
 }
 .rail-btn:hover .tip, .rail-btn:focus-visible .tip { opacity: 1; }
-.main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* Not ".main": Monaco's suggestion rows contain a .main element of their own. */
+.app-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
 /* ------------------------------------------------------------------ controls */
 

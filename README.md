@@ -46,7 +46,8 @@
 - **BlueJ-Projekte öffnen sich direkt** – inklusive Paketen, `+libs`-Bibliotheken und Positionen aus `package.bluej`. BlackJ verändert die `package.bluej`-Dateien nicht.
 
 **Und mehr**
-- Moderner Editor (Monaco, der Editor aus VS Code) mit Autovervollständigung für eigene Klassen, Snippets (`sout`, `fori`, `get`, `set`, `test`) und Erklärungen beim Überfahren von Schlüsselwörtern
+- Moderner Editor (Monaco, der Editor aus VS Code) mit Snippets (`sout`, `fori`, `get`, `set`, `test`) und Erklärungen beim Überfahren von Schlüsselwörtern
+- Autovervollständigung nach dem Punkt, passend zum Typ: eigene Klassen, aber auch `String`, `ArrayList<Tier>`, `Scanner`, `Math`, `System.out` – die wichtigsten Methoden mit kurzer Erklärung auf Deutsch
 - Jeder Compilerfehler und jede Exception wird auf Deutsch erklärt, mit Tipp zur Lösung
 - Live-Inspektor neben dem Code, Objektkarten zeigen ihre Attributwerte
 - Klassendiagramm als PNG speichern, zum Beispiel für den Projektbericht

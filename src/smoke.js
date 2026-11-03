@@ -3,12 +3,14 @@
 import { getState, setState } from './store.js';
 import { api } from './api.js';
 import * as A from './actions.js';
+import monaco from './lib/monaco.js';
+import { resolveReceiver, libMembers } from './lib/completion.js';
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-async function until(cond, ms = 15000) {
+async function until(cond, ms = 15000, what = '') {
   const start = Date.now();
   while (!cond()) {
-    if (Date.now() - start > ms) throw new Error('timeout');
+    if (Date.now() - start > ms) throw new Error('timeout' + (what ? ': ' + what : ''));
     await wait(50);
   }
 }
@@ -186,6 +188,41 @@ export async function runSmoke() {
     await until(() => document.querySelectorAll('.menu .menu-item').length >= 6, 5000);
     await shot('11b-editor-menu');
     A.closeMenu();
+  });
+  await step('completion after a dot knows library and project types', async () => {
+    const text = getState().files['Zoo.java'].content;
+    const model = A.modelOf(getState().files);
+    const zoo = model.byName.Zoo;
+    const at = text.indexOf('gehege.rufeAlle');
+    const kinds = {};
+    for (const expr of ['eingabe', 'name', 'gehege', 'System.out', 'Math', '"x"']) {
+      const r = resolveReceiver(text, at, expr, model, zoo);
+      kinds[expr] = r ? (r.kind === 'project' ? r.cls.simple : r.cls) + (r.statics ? ' static' : '') : null;
+    }
+    const want = { eingabe: 'Scanner', name: 'String', gehege: 'Gehege', 'System.out': 'PrintStream', Math: 'Math static', '"x"': 'String' };
+    if (JSON.stringify(kinds) !== JSON.stringify(want)) throw new Error(JSON.stringify(kinds));
+    const charAt = libMembers('String', false, {}, 'de').find((m) => m.name === 'charAt');
+    if (!charAt || !/Position/.test(charAt.doc)) throw new Error(JSON.stringify(charAt));
+    // The real popup: type "name." on a new line in Zoo.java, look, then put the file back.
+    A.openFile('Zoo.java');
+    const editorOf = () => monaco.editor.getEditors().find((e) => e.getModel() && /Zoo\.java$/.test(decodeURIComponent(e.getModel().uri.path)));
+    await until(() => editorOf(), 6000, 'no editor for Zoo.java');
+    const ed = editorOf();
+    const lineNo = ed.getModel().getLinesContent().findIndex((l) => l.includes('eingabe.nextLine')) + 1;
+    ed.focus();
+    ed.setPosition({ lineNumber: lineNo, column: ed.getModel().getLineMaxColumn(lineNo) });
+    ed.trigger('smoke', 'type', { text: '\nname.' });
+    await wait(100);
+    ed.trigger('smoke', 'editor.action.triggerSuggest', {});
+    await until(() => document.querySelectorAll('.suggest-widget .monaco-list-row').length > 5, 6000, 'no suggest widget');
+    const labels = [...document.querySelectorAll('.suggest-widget .monaco-list-row')].map((r) => (r.getAttribute('aria-label') || r.textContent).split(',')[0]);
+    await log('     suggestions: ' + labels.slice(0, 8).join(' | '));
+    if (!labels.some((l) => /charAt|length|compareTo/.test(l))) throw new Error('no String methods: ' + labels.join(' | '));
+    await wait(900);
+    await shot('11c-completion');
+    ed.trigger('smoke', 'hideSuggestWidget', {});
+    A.editFile('Zoo.java', text);
+    await A.saveFile('Zoo.java');
   });
   await step('AI diff view', async () => {
     const f = getState().files['Hund.java'];

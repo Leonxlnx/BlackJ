@@ -117,7 +117,7 @@ export default function App() {
       <TitleBar />
       <div className="app-body">
         <Rail view={current} />
-        <main className="main">
+        <main className="app-main">
           <ErrorBoundary key={current}>
             {current === 'home' && <Home />}
             {current === 'project' && <Workspace />}

@@ -191,7 +191,8 @@ function watchProject(dir) {
     watcher = fs.watch(dir, { recursive: true }, (_ev, file) => {
       if (!file) return;
       const rel = String(file).split(path.sep).join('/');
-      if (!rel.endsWith('.java') || rel.split('/').some((p) => p.startsWith('.') || p === '+libs')) return;
+      // Same folders as listJavaFiles: no build output, docs or libraries.
+      if (!rel.endsWith('.java') || rel.split('/').slice(0, -1).some((p) => p.startsWith('.') || project.SKIP_DIRS.has(p))) return;
       watchPending.add(rel);
       clearTimeout(watchTimer);
       watchTimer = setTimeout(flushWatch, 300);
