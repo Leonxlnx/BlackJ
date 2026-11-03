@@ -57,6 +57,20 @@ if (!smokeDir && !app.requestSingleInstanceLock()) app.quit();
 const resDir = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', 'resources');
 const benchDir = path.join(resDir, 'bench');
 const examplesDir = path.join(resDir, 'examples');
+const exercisesDir = path.join(resDir, 'exercises');
+
+/** The exercises with their title and topic from the first two lines of README.TXT. */
+function listExercises() {
+  if (!fs.existsSync(exercisesDir)) return [];
+  return fs.readdirSync(exercisesDir).filter((n) => fs.statSync(path.join(exercisesDir, n)).isDirectory()).sort().map((id) => {
+    let lines = [];
+    try {
+      lines = fs.readFileSync(path.join(exercisesDir, id, 'README.TXT'), 'utf8').split(/\r?\n/);
+    } catch { /* no readme */ }
+    const head = (lines[0] || id).match(/^Übung\s+(\d+):\s*(.*)$/);
+    return { id, n: head ? Number(head[1]) : 0, title: head ? head[2] : id, topic: (lines[1] || '').replace(/^Thema:\s*/, '') };
+  });
+}
 const portableDir = process.env.PORTABLE_EXECUTABLE_DIR || (app.isPackaged ? path.dirname(process.execPath) : null);
 
 let win = null;
@@ -266,6 +280,7 @@ function registerIpc() {
       jdk: state.jdk,
       jdks,
       examples: fs.existsSync(examplesDir) ? fs.readdirSync(examplesDir).filter((n) => fs.statSync(path.join(examplesDir, n)).isDirectory()) : [],
+      exercises: listExercises(),
       tutor: tutor.status(),
       smoke: !!smokeDir,
       platform: process.platform,
@@ -427,6 +442,17 @@ function registerIpc() {
   ipcMain.handle('project:example', (_e, name) => wrap(() => {
     const src = path.join(examplesDir, path.basename(name));
     const target = project.copyExample(src, projectsHome());
+    return openProject(target);
+  }));
+
+  // An exercise is copied like an example; a marker file remembers which one it is.
+  ipcMain.handle('project:exercise', (_e, id) => wrap(() => {
+    const src = path.join(exercisesDir, path.basename(String(id)));
+    if (!fs.existsSync(src)) throw Object.assign(new Error('missing'), { code: 'missing' });
+    const target = project.freeDir(projectsHome(), 'Übung ' + path.basename(src));
+    fs.mkdirSync(projectsHome(), { recursive: true });
+    fs.cpSync(src, target, { recursive: true });
+    fs.writeFileSync(path.join(target, project.EXERCISE_MARK), path.basename(src), 'utf8');
     return openProject(target);
   }));
 

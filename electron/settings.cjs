@@ -12,6 +12,7 @@ const DEFAULTS = {
   scopeColors: true,
   aiInline: true,
   aiOff: false,
+  exercisesDone: [],
   showUses: true,
   clearConsoleOnCall: false,
   jdkPath: null,

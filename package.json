@@ -18,8 +18,9 @@
     "test:junit": "node scripts/test-junit.cjs",
     "test:debugger": "node scripts/test-debugger.cjs",
     "test:zip": "node scripts/test-zip.cjs",
+    "test:exercises": "node scripts/test-exercises.cjs",
     "gen:jdkapi": "java scripts/GenJdkApi.java",
-    "test": "npm run build:bench && node scripts/test-bench.cjs && node scripts/test-ai.cjs && node scripts/test-junit.cjs && node scripts/test-debugger.cjs && node scripts/test-zip.cjs",
+    "test": "npm run build:bench && node scripts/test-bench.cjs && node scripts/test-ai.cjs && node scripts/test-junit.cjs && node scripts/test-debugger.cjs && node scripts/test-zip.cjs && node scripts/test-exercises.cjs",
     "fetch:junit": "node scripts/fetch-junit.cjs",
     "dist": "npm run build && node scripts/dist.cjs"
   },
@@ -42,6 +43,10 @@
       {
         "from": "resources/examples",
         "to": "examples"
+      },
+      {
+        "from": "resources/exercises",
+        "to": "exercises"
       },
       {
         "from": "resources/icon.png",

@@ -316,6 +316,42 @@ export async function runSmoke() {
     await until(() => document.querySelector('.learn-detail'));
     await shot('17-learn');
   });
+  await step('exercise: start, tests red, solve, tests green, marked solved', async () => {
+    if ((getState().info.exercises || []).length < 6) throw new Error(JSON.stringify(getState().info.exercises));
+    await A.openExercise('02-Rechner');
+    await until(() => getState().project && getState().project.exercise === '02-Rechner' && getState().files['Rechner.java']);
+    await A.runTests({ all: true });
+    const red = getState().tests.summary;
+    if (!red || red.failed === 0) throw new Error('starter passes: ' + JSON.stringify(red));
+    A.editFile('Rechner.java', `public class Rechner {
+    public int summeBis(int n) {
+        int summe = 0;
+        for (int i = 1; i <= n; i++) summe += i;
+        return summe;
+    }
+
+    public long fakultaet(int n) {
+        long f = 1;
+        for (int i = 2; i <= n; i++) f *= i;
+        return f;
+    }
+
+    public boolean istPrimzahl(int n) {
+        if (n < 2) return false;
+        for (int t = 2; t * t <= n; t++) if (n % t == 0) return false;
+        return true;
+    }
+}
+`);
+    await A.runTests({ all: true });
+    const green = getState().tests.summary;
+    if (green.passed !== green.total) throw new Error(JSON.stringify(green));
+    await until(() => (getState().settings.exercisesDone || []).includes('02-Rechner'), 4000, 'not marked solved');
+    A.go('learn');
+    await until(() => document.querySelector('.ex-row .pill-pos'));
+    document.querySelector('.ex-row').scrollIntoView({ block: 'center' });
+    await shot('17b-exercises');
+  });
   await step('settings page', async () => {
     A.go('settings');
     await until(() => document.querySelector('.set-section'));

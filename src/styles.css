@@ -645,6 +645,13 @@ button.sb-item:hover { background: var(--raised); color: var(--text); }
 .learn-detail p { font-size: 15px; line-height: 24px; color: var(--text-2); max-width: 680px; }
 .learn-code { border-radius: 6px; background: var(--ground); padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 20px; margin: 0; }
 .err-list { margin-top: var(--gap); }
+.ex-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto auto; gap: 16px; align-items: center; padding: 14px 20px; }
+.ex-row + .ex-row { border-top: 1px solid var(--rule); }
+.ex-n { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+.ex-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ex-text h3 { font-size: 14px; font-weight: 600; }
+.ex-text .muted { font-size: var(--fs-small); }
+.ex-hint { margin-top: 10px; }
 .err-row { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; padding: 16px 20px; }
 .err-row + .err-row { border-top: 1px solid var(--rule); }
 .err-row h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }

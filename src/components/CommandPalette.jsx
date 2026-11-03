@@ -72,6 +72,7 @@ export default function CommandPalette() {
     cmd(t('home.openButton'), A.openDialog, '', 'folderOpen');
     cmd(t('zip.open'), A.openZip, '', 'folderOpen');
     cmd(t('nav.learn'), () => A.go('learn'), '', 'book');
+    for (const ex of s.info.exercises || []) cmd(`${t('exercise.palette')}: ${ex.title}`, () => A.openExercise(ex.id), ex.topic.split(',')[0], 'check');
     cmd(t('nav.settings'), () => A.go('settings'), '', 'gear');
     cmd(s.settings.theme === 'dark' ? t('palette.light') : t('palette.dark'), () => A.updateSettings({ theme: s.settings.theme === 'dark' ? 'light' : 'dark' }), '', 'sun');
     cmd(s.settings.lang === 'de' ? 'Switch to English' : 'Auf Deutsch umschalten', () => A.updateSettings({ lang: s.settings.lang === 'de' ? 'en' : 'de' }), '', 'globe');

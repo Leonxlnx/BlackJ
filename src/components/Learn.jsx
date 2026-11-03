@@ -30,6 +30,8 @@ export default function Learn() {
   const project = useStore((s) => s.project);
   const hasKey = useStore((s) => s.info.tutor.hasKey);
   const aiOff = useStore((s) => !!s.settings.aiOff);
+  const exercises = useStore((s) => s.info.exercises || []);
+  const done = useStore((s) => s.settings.exercisesDone || []);
   // The palette (Ctrl+P) opens a concept by setting learnConcept.
   const id = useStore((s) => (CONCEPTS.some((c) => c.id === s.learnConcept) ? s.learnConcept : CONCEPTS[0].id));
   const setId = (next) => {
@@ -127,6 +129,30 @@ export default function Learn() {
                 )}
               </div>
             </article>
+            {exercises.length > 0 && (
+              <section className="err-list">
+                <h2 className="section-title">{t('exercise.title')}</h2>
+                <div className="card">
+                  {exercises.map((ex) => {
+                    const solved = done.includes(ex.id);
+                    return (
+                      <div className="ex-row" key={ex.id}>
+                        <span className="ex-n">{String(ex.n).padStart(2, '0')}</span>
+                        <div className="ex-text">
+                          <h3>{ex.title}</h3>
+                          <span className="muted">{ex.topic}</span>
+                        </div>
+                        {solved && <span className="pill pill-pos">{t('exercise.done')}</span>}
+                        <button className={'btn btn-sm' + (solved ? ' btn-quiet' : '')} onClick={() => A.openExercise(ex.id)}>
+                          {solved ? t('exercise.again') : t('exercise.start')}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="field-hint ex-hint">{t('exercise.hint')}</p>
+              </section>
+            )}
             <section className="err-list">
               <h2 className="section-title">{t('learn.errors')}</h2>
               <div className="card">

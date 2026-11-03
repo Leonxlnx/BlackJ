@@ -54,6 +54,7 @@
 - Befehlspalette (`Strg+P`) für Klassen, Methoden, Befehle und Lernbegriffe, Tastenkürzel-Übersicht mit `F1`
 - Passt sich kleinen Schulbildschirmen an (1280×720), Projekte per Drag & Drop öffnen, Änderungen von außen werden übernommen
 - Lernen-Seite mit den wichtigsten OOP-Begriffen, Beispielen und Suche
+- **6 Übungen mit Tests**: Konstruktor, Schleifen, Texte, Arrays, ArrayList, Vererbung. Aufgabe lesen, Code schreiben, Tests laufen lassen – alle grün heißt geschafft
 - Dunkles und helles Design, Deutsch und Englisch
 
 **KI (optional, mit eigenem API-Schlüssel)**
@@ -91,7 +92,7 @@ Voraussetzungen: Node.js 22, ein JDK ab 11.
 npm install
 npm run fetch:junit   # lädt die JUnit-Jars von Maven Central
 npm start             # baut alles und startet BlackJ
-npm test              # Compiler, Objektbank, Code Pad, KI, JUnit, Debugger, ZIP
+npm test              # Compiler, Objektbank, Code Pad, KI, JUnit, Debugger, ZIP, Übungen
 npm run dist          # baut BlackJ.exe (portable)
 ```
 

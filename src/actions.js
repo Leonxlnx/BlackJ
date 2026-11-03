@@ -61,7 +61,7 @@ function loadProject(p) {
   const positions = layoutAll(model, p.positions || {});
   const firstTab = p.files.find((f) => f.content.includes('static void main')) || p.files[0];
   setState({
-    project: { dir: p.dir, name: p.name, readOnly: p.readOnly, fromBlueJ: p.fromBlueJ, libs: p.libs || [] },
+    project: { dir: p.dir, name: p.name, readOnly: p.readOnly, fromBlueJ: p.fromBlueJ, libs: p.libs || [], exercise: p.exercise || null },
     files,
     readme: p.readme ? { ...p.readme, saved: p.readme.content } : null,
     extraPackages: [],
@@ -177,6 +177,7 @@ export async function exportZip(file) {
 }
 export const openRecent = (dir) => handleOpen(api.project.open(dir));
 export const openExample = (name) => handleOpen(api.project.example(name));
+export const openExercise = (id) => handleOpen(api.project.exercise(id));
 export const createProject = (name) => handleOpen(api.project.create(name));
 
 export function closeProject() {
@@ -709,6 +710,14 @@ export async function runTests(select = { all: true }) {
     return;
   }
   setState({ tests: { running: false, summary: r.result.summary, results: r.result.tests, output: r.result.output, ranAt: Date.now(), select } });
+  // An exercise counts as solved once all tests of its test class pass in one run.
+  const s = getState();
+  const sum = r.result.summary;
+  if (s.project && s.project.exercise && !select.method && sum.total > 0 && sum.passed === sum.total) {
+    const done = s.settings.exercisesDone || [];
+    if (!done.includes(s.project.exercise)) await updateSettings({ exercisesDone: [...done, s.project.exercise] });
+    toast(t('exercise.solved'));
+  }
 }
 
 export function startRecording(testClass, method) {

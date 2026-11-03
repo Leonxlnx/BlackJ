@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('blackj', {
     openDialog: invoke('project:openDialog'),
     open: invoke('project:open'),
     example: invoke('project:example'),
+    exercise: invoke('project:exercise'),
     create: invoke('project:create'),
     write: invoke('project:write'),
     createClass: invoke('project:createClass'),

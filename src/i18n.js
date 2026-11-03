@@ -518,6 +518,14 @@ const de = {
   'addFiles.done': '{n} Klasse(n) hinzugefügt.',
   'err.javadocFailed': 'Javadoc hat nicht geklappt: {message}',
   'err.noClasses': 'Das Projekt hat noch keine Klassen.',
+  'exercise.title': 'Übungen',
+  'exercise.start': 'Starten',
+  'exercise.again': 'Nochmal',
+  'exercise.done': 'Geschafft',
+  'exercise.hint': 'Jede Übung ist ein kleines Projekt mit Aufgabe (README) und Tests. Wenn alle Tests grün sind, ist sie geschafft. Deine Lösung liegt im Ordner Projekte.',
+  'exercise.solved': 'Alle Tests grün – Übung geschafft!',
+  'exercise.palette': 'Übung starten',
+  'home.exercises': '{n} Übungen mit Tests',
 };
 
 const en = {
@@ -1037,6 +1045,14 @@ const en = {
   'addFiles.done': '{n} class(es) added.',
   'err.javadocFailed': 'Javadoc did not work: {message}',
   'err.noClasses': 'The project has no classes yet.',
+  'exercise.title': 'Exercises',
+  'exercise.start': 'Start',
+  'exercise.again': 'Again',
+  'exercise.done': 'Solved',
+  'exercise.hint': 'Each exercise is a small project with a task (README) and tests. Once all tests are green, it is solved. Your solution stays in the Projekte folder.',
+  'exercise.solved': 'All tests green – exercise solved!',
+  'exercise.palette': 'Start exercise',
+  'home.exercises': '{n} exercises with tests',
 };
 
 const dict = { de, en };

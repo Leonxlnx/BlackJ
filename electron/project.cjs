@@ -8,6 +8,7 @@ const LAYOUT = '.blackj.json';
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const SKIP_DIRS = new Set(['+libs', 'doc', 'docs', 'out', 'bin', 'target', 'node_modules']);
 const README = 'README.TXT';
+const EXERCISE_MARK = '.blackj-exercise';
 
 /** Every .java file below dir, as forward-slash paths relative to dir ("tiere/Hund.java"). */
 function listJavaFiles(dir, rel = '', depth = 0, out = []) {
@@ -112,6 +113,13 @@ function open(dir) {
     libs: libsOf(dir).map((p) => path.basename(p)),
     positions: layout.positions,
     fromBlueJ: fs.existsSync(path.join(dir, 'package.bluej')),
+    exercise: (() => {
+      try {
+        return fs.readFileSync(path.join(dir, EXERCISE_MARK), 'utf8').trim() || null;
+      } catch {
+        return null;
+      }
+    })(),
     readOnly,
   };
 }
@@ -250,4 +258,4 @@ function createProject(parent, name) {
   return dir;
 }
 
-module.exports = { open, writeFile, renameFile, createClass, createPackage, addFile, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, freeDir, projectRoot, archiveFiles, IDENT, SKIP_DIRS };
+module.exports = { open, writeFile, renameFile, createClass, createPackage, addFile, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, freeDir, projectRoot, archiveFiles, IDENT, SKIP_DIRS, EXERCISE_MARK };
