@@ -1,7 +1,7 @@
 {
   "name": "blackj",
   "productName": "BlackJ",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "BlackJ – Java lernen mit Klassendiagramm, Live-Objekten und KI-Tutor",
   "main": "electron/main.cjs",
   "private": true,

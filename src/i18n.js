@@ -10,6 +10,7 @@ const de = {
 
   'home.title': 'Projekte',
   'home.sub': 'Öffne ein Projekt oder fang mit einem Beispiel an.',
+  'home.tagline': 'Java lernen wie mit BlueJ. Nur in modern.',
   'home.new': 'Neues Projekt',
   'home.open': 'Ordner öffnen',
   'home.openHint': 'BlueJ-Projekte öffnen sich direkt, auch als ZIP. Du kannst einen Ordner oder eine ZIP-Datei auch einfach ins Fenster ziehen.',
@@ -537,6 +538,7 @@ const en = {
 
   'home.title': 'Projects',
   'home.sub': 'Open a project or start with an example.',
+  'home.tagline': 'Learn Java like with BlueJ. Just modern.',
   'home.new': 'New project',
   'home.open': 'Open folder',
   'home.openHint': 'BlueJ projects open as they are, also as ZIP. You can also drag a folder or a ZIP file into the window.',

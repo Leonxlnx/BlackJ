@@ -118,10 +118,8 @@ code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 }
 .titlebar button, .titlebar input, .titlebar a { -webkit-app-region: no-drag; }
 .tb-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.tb-mark { width: var(--rail); height: 22px; flex: none; color: var(--text); }
-/* The cursor in the mark blinks only while BlackJ is compiling or a program runs. */
-.tb-mark.busy .mark-caret { animation: caret 1.06s steps(1) infinite; }
-@keyframes caret { 50% { opacity: 0; } }
+.tb-mark { width: var(--rail); height: 22px; flex: none; }
+.tb-brand { font-weight: 800; letter-spacing: -0.01em; }
 .tb-title { font-size: 13px; font-weight: 600; line-height: 20px; margin: 0; white-space: nowrap; }
 .crumbs-bar { display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; }
 .crumb { background: none; border: 0; padding: 3px 6px; border-radius: 5px; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
@@ -263,6 +261,10 @@ button.sb-item:hover { background: var(--raised); color: var(--text); }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
 .page-head h1 { font-size: var(--fs-title); line-height: 32px; font-weight: 600; letter-spacing: -0.01em; }
 .page-head p { color: var(--muted); margin-top: 6px; font-size: 14px; }
+.home-brand { justify-content: flex-start; align-items: center; gap: 18px; }
+.brand-mark { width: 56px; height: 56px; flex: none; }
+.page-head h1.wordmark { font-size: 34px; line-height: 38px; font-weight: 800; letter-spacing: -0.025em; }
+.home-brand p { margin-top: 4px; }
 .section-title { font-size: var(--fs-section); font-weight: 400; color: var(--muted); margin-bottom: 12px; line-height: 28px; }
 .card { background: var(--surface); border-radius: var(--radius-card); box-shadow: var(--card-shadow); }
 :root[data-theme='light'] .card { border: 1px solid var(--border); }

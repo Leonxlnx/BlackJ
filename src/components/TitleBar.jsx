@@ -27,7 +27,7 @@ export default function TitleBar() {
   return (
     <header className="titlebar">
       <div className="tb-left">
-        <Mark className={'tb-mark' + (compileState === 'compiling' || running ? ' busy' : '')} />
+        <Mark className="tb-mark" />
         {inProject ? (
           <nav className="crumbs-bar" aria-label="Pfad">
             <h1 className="tb-title">
@@ -41,7 +41,7 @@ export default function TitleBar() {
             ))}
           </nav>
         ) : (
-          <span className="tb-title">{viewTitle ? `BlackJ · ${viewTitle}` : 'BlackJ'}</span>
+          <span className="tb-title"><span className="tb-brand">BlackJ</span>{viewTitle ? ` · ${viewTitle}` : ''}</span>
         )}
       </div>
 

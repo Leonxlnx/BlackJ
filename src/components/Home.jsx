@@ -3,7 +3,7 @@ import { useStore, setState } from '../store.js';
 import { useT, relativeDay } from '../i18n.js';
 import * as A from '../actions.js';
 import { api } from '../api.js';
-import Icon from './Icon.jsx';
+import Icon, { Mark } from './Icon.jsx';
 
 // Small drawings of each example's class diagram: boxes, and inheritance arrows from child to parent.
 const MINI = {
@@ -58,10 +58,11 @@ export default function Home() {
   return (
     <div className="page">
       <div className="page-inner">
-        <div className="page-head">
+        <div className="page-head home-brand">
+          <Mark className="brand-mark" />
           <div>
-            <h1>{t('home.title')}</h1>
-            <p>{t('home.sub')}</p>
+            <h1 className="wordmark">BlackJ</h1>
+            <p>{t('home.tagline')}</p>
           </div>
         </div>
         <div className="home-grid">

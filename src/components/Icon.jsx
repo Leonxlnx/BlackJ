@@ -55,12 +55,25 @@ export default function Icon({ name, ...rest }) {
 }
 
 /** The BlackJ mark: a coffee bean, for Java. */
-/** The BlackJ mark: a J being typed, the text cursor right after it. */
+const SPADE = 'M10 0C7.4 3.4 0 7.6 0 13.2c0 3.6 2.9 5.8 6 5.1 1.3-.3 2.4-1 3.1-2-.2 2.6-1.3 4.7-3.2 6.7h8.2c-1.9-2-3-4.1-3.2-6.7.7 1 1.8 1.7 3.1 2 3.1.7 6-1.5 6-5.1C20 7.6 12.6 3.4 10 0z';
+
+/**
+ * The BlackJ mark: a blackjack, the Ace of spades and the black Jack. Brand colours, not theme
+ * colours, so it looks the same everywhere. scripts/make-icon.cjs draws the same picture.
+ */
 export function Mark(props) {
   return (
-    <svg viewBox="0 0 32 32" aria-hidden="true" {...props}>
-      <path d="M19.6 5.5V18.2a6.1 6.1 0 0 1-12.2 0" fill="none" stroke="currentColor" strokeWidth="4.4" />
-      <rect className="mark-caret" x="24.2" y="5.5" width="2.8" height="20.8" fill="var(--accent)" />
+    <svg viewBox="0 0 100 100" aria-hidden="true" {...props}>
+      <rect width="100" height="100" rx="22.5" fill="#e8913a" />
+      <g transform="rotate(-15 36 56)">
+        <rect x="12" y="16" width="46" height="66" rx="6.5" fill="#f6f4ef" />
+        <text x="25" y="37" fontFamily="'Public Sans'" fontWeight="900" fontSize="20" fill="#141416" textAnchor="middle">A</text>
+        <path d={SPADE} fill="#141416" transform="translate(20.25 41) scale(0.475)" />
+      </g>
+      <g transform="rotate(11 64 52)">
+        <rect x="40" y="17" width="46" height="66" rx="6.5" fill="#141416" stroke="#e8913a" strokeWidth="3.5" />
+        <text x="63" y="64" fontFamily="'Public Sans'" fontWeight="900" fontSize="52" fill="#f6f4ef" textAnchor="middle">J</text>
+      </g>
     </svg>
   );
 }
