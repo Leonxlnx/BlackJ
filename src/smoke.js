@@ -4,7 +4,7 @@ import { getState, setState } from './store.js';
 import { api } from './api.js';
 import * as A from './actions.js';
 import monaco from './lib/monaco.js';
-import { resolveReceiver, libMembers } from './lib/completion.js';
+import { resolveReceiver, libMembers, callAt } from './lib/completion.js';
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(cond, ms = 15000, what = '') {
@@ -221,6 +221,14 @@ export async function runSmoke() {
     await wait(900);
     await shot('11c-completion');
     ed.trigger('smoke', 'hideSuggestWidget', {});
+    const calls = [callAt('x = name.substring(1, '), callAt('new Hund("Rex, (", '), callAt('if (a > ')];
+    if (JSON.stringify(calls) !== JSON.stringify([{ name: 'substring', expr: 'name', argIndex: 1 }, { ctor: 'Hund', argIndex: 1 }, null])) throw new Error(JSON.stringify(calls));
+    ed.trigger('smoke', 'type', { text: 'substring(' });
+    await wait(100);
+    ed.trigger('smoke', 'editor.action.triggerParameterHints', {});
+    await until(() => document.querySelector('.parameter-hints-widget.visible'), 6000, 'no parameter hints');
+    await wait(500);
+    await shot('11d-parameter-hints');
     A.editFile('Zoo.java', text);
     await A.saveFile('Zoo.java');
   });

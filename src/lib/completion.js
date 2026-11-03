@@ -96,6 +96,40 @@ export function resolveReceiver(text, offset, expr, model, cur) {
   return { kind: 'lib', cls: lib, statics: false, args: map };
 }
 
+/**
+ * The call the cursor is inside of, for parameter hints: { name, expr, argIndex } for a method
+ * (expr is the receiver or null), { ctor, argIndex } for `new Klasse(`, or null.
+ * `before` is the source text up to the cursor.
+ */
+export function callAt(before) {
+  let depth = 0;
+  let commas = 0;
+  for (let i = before.length - 1; i >= 0; i--) {
+    const ch = before[i];
+    if (ch === '"' || ch === "'") {
+      // Skip a string or char literal backwards.
+      for (i--; i >= 0 && !(before[i] === ch && before[i - 1] !== '\\'); i--);
+      continue;
+    }
+    if (ch === ')' || ch === ']' || ch === '}') depth++;
+    else if (ch === '(' || ch === '[' || ch === '{') {
+      if (depth > 0) {
+        depth--;
+        continue;
+      }
+      if (ch !== '(') return null;
+      const head = before.slice(0, i);
+      const m = head.match(/(?:\bnew\s+([A-Z][\w$]*)|([A-Za-z_$][\w$]*))\s*$/);
+      if (!m || /^(if|for|while|switch|catch|return|synchronized)$/.test(m[2] || '')) return null;
+      if (m[1]) return { ctor: m[1], argIndex: commas };
+      const rest = head.slice(0, head.length - m[0].length);
+      return { name: m[2], expr: /\.\s*$/.test(rest) ? receiverOf(rest) : null, argIndex: commas };
+    } else if (ch === ',' && depth === 0) commas++;
+    else if (ch === ';' && depth === 0) return null;
+  }
+  return null;
+}
+
 /** Replaces type variables (E, K, V, T) with the declared type arguments. */
 function fill(type, args) {
   return type.replace(/\b[A-Z]\b/g, (v) => args[v] || (v.length === 1 ? 'Object' : v)).replace(/\? extends |\? super /g, '');

@@ -9,7 +9,7 @@ import { reindent } from '../lib/format.js';
 import { explainProblem } from '../lib/errors.js';
 import { explainException } from '../lib/exceptions.js';
 import { scopeRanges } from '../lib/javaParse.js';
-import { receiverOf, resolveReceiver, libMembers, projectMembers } from '../lib/completion.js';
+import { receiverOf, resolveReceiver, libMembers, projectMembers, callAt } from '../lib/completion.js';
 import { infoFor } from '../model.js';
 import Icon from './Icon.jsx';
 import DocsView from './DocsView.jsx';
@@ -37,10 +37,14 @@ function registerProviders() {
       const projectModel = A.modelOf(s.files);
       const cur = projectModel.list.find((c) => c.file === s.activeTab) || null;
       const recv = resolveReceiver(model.getValue(), model.getOffsetAt(position), receiverOf(before), projectModel, cur);
-      if (!recv || recv.kind !== 'lib') return null;
-      const hits = libMembers(recv.cls, recv.statics, recv.args, s.settings.lang).filter((m) => m.name === word.word);
+      if (!recv || recv.kind === 'array') return null;
+      const members = recv.kind === 'lib'
+        ? libMembers(recv.cls, recv.statics, recv.args, s.settings.lang)
+        : projectMembers(projectModel, recv.cls, recv.statics, !!cur && cur.fileClass === recv.cls.fileClass);
+      const hits = members.filter((m) => m.name === word.word);
       if (!hits.length) return null;
-      const sigs = hits.slice(0, 6).map((m) => (m.field ? `${m.ret} ${recv.cls}.${m.name}` : `${m.ret} ${m.name}(${m.params.join(', ')})`)).join('\n');
+      const owner = recv.kind === 'lib' ? recv.cls : recv.cls.simple;
+      const sigs = hits.slice(0, 6).map((m) => (m.field ? `${m.ret} ${m.owner || owner}.${m.name}` : `${m.ret} ${m.name}(${m.params.map((p, i) => (m.names ? `${p} ${m.names[i]}` : p)).join(', ')})`)).join('\n');
       const doc = hits.find((m) => m.doc);
       return { range, contents: [{ value: '```java\n' + sigs + (hits.length > 6 ? '\n…' : '') + '\n```' }, ...(doc ? [{ value: doc.doc }] : [])] };
     },
@@ -71,6 +75,48 @@ function registerProviders() {
     },
     freeInlineCompletions() {},
     disposeInlineCompletions() {},
+  });
+
+  // Parameter hints while typing a call: substring( shows int beginIndex, int endIndex.
+  monaco.languages.registerSignatureHelpProvider('java', {
+    signatureHelpTriggerCharacters: ['(', ','],
+    signatureHelpRetriggerCharacters: [','],
+    provideSignatureHelp(model, position) {
+      const s = getState();
+      const offset = model.getOffsetAt(position);
+      const text = model.getValue();
+      const call = callAt(text.slice(Math.max(0, offset - 3000), offset));
+      if (!call) return null;
+      const projectModel = A.modelOf(s.files);
+      const cur = projectModel.list.find((c) => c.file === s.activeTab) || null;
+      let found = [];
+      if (call.ctor) {
+        const pc = projectModel.list.find((c) => c.simple === call.ctor);
+        if (pc) found = pc.ctors.map((k) => ({ name: pc.simple, params: k.params.map((p) => p.type), names: k.params.map((p) => p.name), doc: k.doc ? k.doc.text : null }));
+      } else {
+        let members = [];
+        if (call.expr) {
+          const recv = resolveReceiver(text, offset, call.expr, projectModel, cur);
+          if (recv && recv.kind === 'lib') members = libMembers(recv.cls, recv.statics, recv.args, s.settings.lang);
+          else if (recv && recv.kind === 'project') members = projectMembers(projectModel, recv.cls, recv.statics, !!cur && cur.fileClass === recv.cls.fileClass);
+        } else if (cur) members = projectMembers(projectModel, cur, false, true);
+        found = members.filter((m) => !m.field && m.name === call.name);
+      }
+      if (!found.length) return null;
+      const signatures = found.slice(0, 12).map((m) => {
+        let label = m.name + '(';
+        const parameters = m.params.map((p, i) => {
+          const part = m.names ? `${p} ${m.names[i]}` : p;
+          const start = label.length;
+          label += (i ? ', ' : '') + part;
+          return { label: [start + (i ? 2 : 0), label.length] };
+        });
+        label += ')' + (m.ret ? ': ' + m.ret : '');
+        return { label, parameters, documentation: m.doc || undefined };
+      });
+      const active = signatures.findIndex((x) => x.parameters.length > call.argIndex);
+      return { value: { signatures, activeSignature: Math.max(0, active), activeParameter: call.argIndex }, dispose() {} };
+    },
   });
 
   monaco.editor.registerCommand('blackj.aiFix', (_accessor, problem) => A.aiFix(problem));
