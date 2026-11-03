@@ -64,7 +64,7 @@ export default function StatusBar() {
             {t('status.aiInline')} {settings.aiInline ? t('settings.on') : t('settings.off')}
           </button>
         )}
-        <span className="sb-item">{info.jdk ? `Java ${info.jdk.version}` : t('home.javaMissing')}</span>
+        <span className="sb-item sb-hide-narrow">{info.jdk ? `Java ${info.jdk.version}` : t('home.javaMissing')}</span>
       </div>
     </footer>
   );

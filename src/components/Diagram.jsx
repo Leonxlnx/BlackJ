@@ -163,6 +163,8 @@ export default function Diagram({ model }) {
   const tests = useStore((s) => s.tests);
   const projectDir = useStore((s) => s.project.dir);
   const readOnly = useStore((s) => s.project.readOnly);
+  const showUses = useStore((s) => s.settings.showUses !== false);
+  const arrangedAt = useStore((s) => s.arrangedAt);
   const hostRef = useRef(null);
   const cardRefs = useRef({});
   const [sizes, setSizes] = useState({});
@@ -209,7 +211,7 @@ export default function Diagram({ model }) {
   };
 
   useEffect(() => {
-    const id = projectDir + '|' + pkg;
+    const id = projectDir + '|' + pkg + '|' + (arrangedAt || 0);
     if (fitted.current === id || !Object.keys(sizes).length) return;
     fitted.current = id;
     fit();
@@ -229,7 +231,32 @@ export default function Diagram({ model }) {
   const rects = {};
   for (const k of keys) rects[k] = { ...pos(k), w: sizes[k]?.w || 200, h: sizes[k]?.h || 80 };
   const visible = new Set(classes.map((c) => c.fileClass));
-  const edges = model.edges.filter((e) => visible.has(e.from) && visible.has(e.to));
+  const edges = model.edges.filter((e) => visible.has(e.from) && visible.has(e.to) && (showUses || e.kind !== 'uses'));
+
+  /** Arrow keys move the selection to the nearest class card in that direction. */
+  const moveSelection = (from, key) => {
+    const a = rects[from];
+    if (!a) return;
+    const cx = a.x + a.w / 2;
+    const cy = a.y + a.h / 2;
+    let best = null;
+    for (const c of classes) {
+      if (c.fileClass === from) continue;
+      const b = rects[c.fileClass];
+      const dx = b.x + b.w / 2 - cx;
+      const dy = b.y + b.h / 2 - cy;
+      const along = key === 'ArrowRight' ? dx : key === 'ArrowLeft' ? -dx : key === 'ArrowDown' ? dy : -dy;
+      const across = key === 'ArrowRight' || key === 'ArrowLeft' ? Math.abs(dy) : Math.abs(dx);
+      if (along <= 4) continue;
+      const score = along + across * 2;
+      if (!best || score < best.score) best = { score, cls: c.fileClass };
+    }
+    if (best) {
+      setState({ selectedClass: best.cls });
+      const el = cardRefs.current[best.cls];
+      if (el) el.focus();
+    }
+  };
   const kinds = new Set(edges.map((e) => e.kind));
 
   const onWheel = (e) => {
@@ -321,6 +348,14 @@ export default function Diagram({ model }) {
         <button className="icon-btn" aria-pressed={details} aria-label={t('diagram.details')} title={t('diagram.details')} onClick={() => A.updateSettings({ diagramDetails: !details })} style={details ? { color: 'var(--text)' } : undefined}>
           <Icon name="layers" />
         </button>
+        <button className="icon-btn" aria-pressed={showUses} aria-label={t('diagram.showUses')} title={t('diagram.showUses')} onClick={() => A.updateSettings({ showUses: !showUses })} style={showUses ? { color: 'var(--text)' } : undefined}>
+          <Icon name="link" />
+        </button>
+        {!readOnly && (
+          <button className="icon-btn" aria-label={t('diagram.arrange')} title={t('diagram.arrange')} onClick={A.arrange}>
+            <Icon name="arrange" />
+          </button>
+        )}
       </div>
       <div className={'diagram' + (panning ? ' panning' : '')} ref={hostRef} onPointerDown={startPan} onWheel={onWheel}>
         {keys.length === 0 && !pkg ? (
@@ -400,8 +435,14 @@ export default function Diagram({ model }) {
                     setState({ selectedClass: cls });
                     classMenu(cls, e.clientX, e.clientY, t);
                   }}
+                  onFocus={() => setState({ selectedClass: cls })}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') A.openClass(cls);
+                    if (e.key.startsWith('Arrow')) {
+                      e.preventDefault();
+                      moveSelection(cls, e.key);
+                    }
+                    if (e.key === 'Delete' && !readOnly) A.openDialogBox({ type: 'delete', cls });
                     if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
                       const r = e.currentTarget.getBoundingClientRect();
                       classMenu(cls, r.left + 16, r.top + 24, t);

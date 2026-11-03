@@ -58,6 +58,22 @@ export async function runSmoke() {
     if (getState().bench.objects.length !== 3) throw new Error('bench has ' + getState().bench.objects.length);
     await shot('03-objects-inspector');
   });
+  await step('small screens: 1366x768 and 1280x720 with the side panel as a drawer', async () => {
+    await api.smoke.resize({ width: 1366, height: 728 });
+    await shot('03a-1366');
+    await api.smoke.resize({ width: 1280, height: 680 });
+    await shot('03b-1280');
+    setState({ tutorOpen: true, side: 'inspect' });
+    await until(() => document.querySelector('.side-drawer'));
+    await shot('03c-1280-drawer');
+    setState({ tutorOpen: false });
+    setState({ shortcuts: true });
+    await until(() => document.querySelector('.shortcuts'));
+    await shot('03d-shortcuts');
+    setState({ shortcuts: false });
+    await api.smoke.resize({ width: 1440, height: 860 });
+    setState({ tutorOpen: true, side: 'inspect' });
+  });
   await step('call dialog and result', async () => {
     const hund = await A.describe('Hund');
     A.openDialogBox({ type: 'call', kind: 'new', cls: 'Hund', method: hund.constructors[0] });
@@ -117,6 +133,30 @@ export async function runSmoke() {
     await A.compile();
     await until(() => getState().compile.state === 'ok');
   });
+  await step('diagram tools: arrange and uses arrows', async () => {
+    A.arrange();
+    await A.updateSettings({ showUses: false });
+    await until(() => document.querySelectorAll('.edges path.uses').length === 0);
+    await A.updateSettings({ showUses: true });
+    await until(() => document.querySelectorAll('.edges path.uses').length > 0);
+  });
+  await step('change from outside is picked up', async () => {
+    const f = getState().files['Katze.java'];
+    await api.smoke.writeFile({ name: 'Katze.java', content: f.content.replace('leben = 7;', 'leben = 9; // von außen') });
+    await until(() => getState().files['Katze.java'].content.includes('von außen'), 8000);
+    await api.smoke.writeFile({ name: 'Vogel.java', content: 'public class Spatz {\n    public String singe() { return "Tschilp"; }\n}\n' });
+    await until(() => getState().files['Vogel.java'], 8000);
+  });
+  await step('rename fix for class/file name mismatch', async () => {
+    await A.compile();
+    await until(() => getState().compile.state === 'errors');
+    const p = getState().compile.problems.find((x) => /should be declared in a file named/.test(x.message));
+    if (!p) throw new Error(JSON.stringify(getState().compile.problems));
+    setState({ dock: 'problems' });
+    await shot('09b-rename-fix');
+    await A.renameToClass('Vogel.java', 'Spatz');
+    await until(() => getState().compile.state === 'ok' && getState().files['Spatz.java'], 15000);
+  });
   await step('documentation view', async () => {
     A.openFile('Tier.java');
     setState({ editorMode: 'docs' });
@@ -161,7 +201,6 @@ export async function runSmoke() {
       const file = getState().files['Bibliothek.java'];
       const line = file.content.split('\n').findIndex((l) => l.includes('zahl++')) + 1;
       A.toggleBreakpoint('Bibliothek.java', line);
-      await wait(600);
       const bib = await A.describe('Bibliothek');
       await A.createObject('Bibliothek', bib.constructors[0], [], 'bib');
       const buch = await A.describe('medien.Buch');
@@ -202,6 +241,14 @@ export async function runSmoke() {
     await A.updateSettings({ lang: 'en' });
     await shot('20-english');
     await A.updateSettings({ lang: 'de' });
+  });
+  await step('home with recent projects', async () => {
+    A.go('home');
+    await until(() => document.querySelectorAll('.recent-row').length >= 2);
+    await shot('21-home-recent');
+    await api.smoke.resize({ width: 1024, height: 680 });
+    await shot('22-home-small');
+    await api.smoke.resize({ width: 1440, height: 860 });
   });
   await log(failures ? `${failures} step(s) failed` : 'all steps passed');
   await api.smoke.done(failures ? 1 : 0);

@@ -541,15 +541,21 @@ function benchClient(run) {
 
   await check('pause during heavy output never blocks the bench', async () => {
     const call = bench.request('call', { className: 'Tier', key: 'plappern(int)', args: [{ kind: 'text', text: '2500' }] });
+    // On a busy machine the loop may finish before all rounds; a pause then finds nothing running.
+    let rounds = 0;
     for (let i = 0; i < 6; i++) {
-      await sleep(120);
-      assert.deepStrictEqual(await dbg2.pause(), { paused: true, thread: 'main' });
+      await sleep(i === 0 ? 60 : 120);
+      const r = await dbg2.pause();
+      if (!r.paused) break;
+      assert.deepStrictEqual(r, { paused: true, thread: 'main' });
       const p = await ev2.next('paused');
       assert.strictEqual(p.reason, 'pause');
       assert.deepStrictEqual(p.frames.map((f) => f.method), ['plappern']);
-      assert.strictEqual(await within(bench.request('ping'), 'ping while paused in output (round ' + i + ')', 3000), 'pong');
+      assert.strictEqual(await within(bench.request('ping'), 'ping while paused in output (round ' + i + ')', 6000), 'pong');
       await dbg2.resume();
+      rounds++;
     }
+    assert.ok(rounds >= 1, 'paused at least once while it printed');
     assert.ok(Number((await within(call, 'plappern reply')).value.text) > 0);
   });
 

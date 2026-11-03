@@ -19,6 +19,7 @@ export async function init() {
   api.bench.onState(onBenchState);
   api.ai.onEvent(onAiEvent);
   if (api.debug) api.debug.onEvent(onDebugEvent);
+  if (api.onProjectChanged) api.onProjectChanged(onProjectChanged);
   if (info.smoke) import('./smoke.js').then((m) => m.runSmoke());
 }
 
@@ -99,6 +100,14 @@ async function handleOpen(promise) {
     setState({ info, settings: info.settings });
   } else if (r.error.code !== 'canceled') toast(r.error.code === 'missing' ? t('home.missing') : errorText(r.error), 'bad');
   return r.ok;
+}
+
+export const openPath = (p) => handleOpen(api.project.open(p));
+export const dropText = () => t('drop.hint');
+
+export async function removeRecent(dir) {
+  const recent = (getState().settings.recent || []).filter((r) => r.dir !== dir);
+  await updateSettings({ recent });
 }
 
 export const openDialog = () => handleOpen(api.project.openDialog());
@@ -245,6 +254,77 @@ public class ${name} {
     }
 }
 `;
+}
+
+/** A file changed outside BlackJ. Unsaved work in the editor always wins; otherwise take the new version. */
+function onProjectChanged(ev) {
+  const s = getState();
+  if (!s.project) return;
+  const f = s.files[ev.name];
+  if (ev.deleted) {
+    if (!f || isDirty(f)) return;
+    setState((st) => {
+      const files = { ...st.files };
+      delete files[ev.name];
+      const tabs = st.tabs.filter((x) => x !== ev.name);
+      return { files, tabs, activeTab: st.activeTab === ev.name ? tabs[0] || null : st.activeTab };
+    });
+    return;
+  }
+  if (f) {
+    if (f.saved === ev.content || f.content === ev.content) return;
+    if (isDirty(f)) {
+      toast(t('watch.conflict', { file: simpleName(f.className) + '.java' }));
+      return;
+    }
+    setState((st) => ({ files: { ...st.files, [ev.name]: { ...st.files[ev.name], content: ev.content, saved: ev.content } } }));
+    toast(t('watch.reloaded', { file: simpleName(f.className) + '.java' }));
+    return;
+  }
+  setState((st) => ({ files: { ...st.files, [ev.name]: { name: ev.name, className: ev.className, pkg: ev.pkg, content: ev.content, saved: ev.content } } }));
+  const model = projectModel(getState().files);
+  setState((st) => ({ positions: autoLayout(model, st.positions, ev.pkg) }));
+}
+
+/** "class Hund is public, should be declared in a file named Hund.java": rename the file to match. */
+export async function renameToClass(fileRel, className) {
+  const dir = fileRel.includes('/') ? fileRel.slice(0, fileRel.lastIndexOf('/') + 1) : '';
+  const to = dir + className + '.java';
+  await saveFile(fileRel);
+  const r = await api.project.rename({ from: fileRel, to });
+  if (!r.ok) {
+    toast(errorText(r.error), 'bad');
+    return;
+  }
+  setState((s) => {
+    const files = { ...s.files };
+    const f = files[fileRel];
+    delete files[fileRel];
+    const qualified = (f.pkg ? f.pkg + '.' : '') + className;
+    files[to] = { ...f, name: to, className: qualified };
+    const positions = { ...s.positions };
+    if (positions[f.className]) {
+      positions[qualified] = positions[f.className];
+      delete positions[f.className];
+    }
+    const tabs = s.tabs.map((x) => (x === fileRel ? to : x));
+    return { files, positions, tabs, activeTab: s.activeTab === fileRel ? to : s.activeTab };
+  });
+  persistPositions();
+  await compile();
+}
+
+/** Lays out the classes of the current package again from scratch. */
+export function arrange() {
+  const s = getState();
+  const model = projectModel(s.files);
+  const keep = Object.fromEntries(Object.entries(s.positions).filter(([k]) => {
+    if (k.startsWith('pkg:')) return packageOfClass(k.slice(4)) !== s.pkg;
+    const info = model.byName[k];
+    return info ? info.pkg !== s.pkg : true;
+  }));
+  setState({ positions: autoLayout(model, keep, s.pkg), arrangedAt: Date.now() });
+  persistPositions();
 }
 
 export async function newPackage(name) {
@@ -410,6 +490,7 @@ export function statementFor({ kind, cls, target, method, args, name }) {
 }
 
 export async function createObject(cls, ctor, args, name) {
+  await breakpointsReady();
   const r = await api.bench.create({ className: cls, key: ctor.key, args, name: name || null });
   if (!r.ok) {
     if (r.error.kind === 'exception') {
@@ -419,6 +500,7 @@ export async function createObject(cls, ctor, args, name) {
     return { error: errorText(r.error) };
   }
   const stmt = statementFor({ kind: 'new', cls, method: ctor, args, name: r.result.name });
+  if (getState().settings.clearConsoleOnCall) clearConsole();
   logCall(stmt);
   record(stmt);
   setState((s) => ({ bench: { ...s.bench, objects: r.result.bench, lastNew: r.result.name }, dock: s.dock === 'pad' ? 'pad' : 'objects', exception: null, inspect: { ref: r.result.name, trail: [r.result.name] }, side: s.side === 'tutor' && !s.tutorPinned ? 'inspect' : s.side }));
@@ -426,6 +508,7 @@ export async function createObject(cls, ctor, args, name) {
 }
 
 export async function callMethod({ target, cls, method, args }) {
+  await breakpointsReady();
   const r = await api.bench.call({ target: method.static ? null : target, className: cls, key: method.key, args });
   if (!r.ok) {
     if (r.error.kind === 'exception') {
@@ -438,6 +521,7 @@ export async function callMethod({ target, cls, method, args }) {
   const res = r.result;
   const callText = `${method.static ? simpleName(cls) : target}.${method.name}(${(method.params || []).map((p, i) => literal(args[i], p)).join(', ')})`;
   const shown = res.void ? '' : res.value.kind === 'string' ? JSON.stringify(res.value.text) : res.value.text ?? res.value.type;
+  if (getState().settings.clearConsoleOnCall) clearConsole();
   logCall(res.void ? callText : `${callText}  →  ${shown}`);
   if (res.void) record(callText + ';');
   setState((s) => ({ bench: { ...s.bench, objects: res.bench }, exception: null, inspectTick: Date.now() }));
@@ -448,7 +532,9 @@ export async function callMethod({ target, cls, method, args }) {
 export async function runMain(cls) {
   if (!(await ensureCompiled())) return;
   setState({ dock: 'console', menu: null, palette: null });
+  if (getState().settings.clearConsoleOnCall) clearConsole();
   logCall(`${simpleName(cls)}.main(new String[0])`);
+  await breakpointsReady();
   const r = await api.bench.main({ className: cls });
   if (!r.ok) {
     if (r.error.kind === 'exception') setException(r.error, `${simpleName(cls)}.main`);
@@ -514,6 +600,7 @@ export async function padRun(code) {
   if (!(await ensureCompiled())) return;
   const id = uid();
   setState((s) => ({ pad: { ...s.pad, busy: true, entries: [...s.pad.entries, { id, code: text, status: 'running' }] } }));
+  await breakpointsReady();
   const r = await api.bench.pad({ code: text });
   const patch = (e) => setState((s) => ({ pad: { ...s.pad, busy: false, vars: r.ok && r.result.vars ? r.result.vars : s.pad.vars, entries: s.pad.entries.map((x) => (x.id === id ? { ...x, ...e } : x)) } }));
   if (!r.ok) {
@@ -597,16 +684,21 @@ export function toggleBreakpoint(file, line) {
   syncBreakpoints();
 }
 
+// The debug helper attaches in the background; calls into the program wait for it, so a
+// breakpoint set just before a method call is always in place when the method runs.
+let bpSync = Promise.resolve();
 export function syncBreakpoints() {
-  if (!api.debug) return;
+  if (!api.debug) return bpSync;
   const s = getState();
   const map = {};
   for (const [file, lines] of Object.entries(s.breakpoints || {})) {
     const f = s.files[file];
     if (f && lines.length) map[f.className] = lines;
   }
-  api.debug.setBreakpoints({ breakpoints: map });
+  bpSync = api.debug.setBreakpoints({ breakpoints: map }).catch(() => null);
+  return bpSync;
 }
+const breakpointsReady = () => Promise.race([bpSync, new Promise((r) => setTimeout(r, 5000))]);
 
 function onDebugEvent(ev) {
   if (ev.event === 'paused') {

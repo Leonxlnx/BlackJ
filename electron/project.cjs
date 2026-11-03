@@ -154,6 +154,14 @@ function createPackage(dir, pkg) {
   return parts.join('.');
 }
 
+/** Renames a class file (for a class whose name no longer matches its file). */
+function renameFile(dir, fromRel, toRel) {
+  const from = safeFile(dir, fromRel);
+  const to = safeFile(dir, toRel);
+  if (fs.existsSync(to)) throw Object.assign(new Error('exists'), { code: 'exists' });
+  fs.renameSync(from, to);
+}
+
 function savePositions(dir, positions) {
   fs.writeFileSync(path.join(dir, LAYOUT), JSON.stringify({ version: 1, positions }, null, 2), 'utf8');
 }
@@ -177,4 +185,4 @@ function createProject(parent, name) {
   return dir;
 }
 
-module.exports = { open, writeFile, createClass, createPackage, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, IDENT };
+module.exports = { open, writeFile, renameFile, createClass, createPackage, savePositions, copyExample, createProject, safeFile, listJavaFiles, libsOf, IDENT };

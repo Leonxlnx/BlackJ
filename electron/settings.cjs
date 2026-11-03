@@ -11,6 +11,8 @@ const DEFAULTS = {
   diagramDetails: true,
   scopeColors: true,
   aiInline: true,
+  showUses: true,
+  clearConsoleOnCall: false,
   jdkPath: null,
   model: 'claude-opus-5-5',
   tutorMode: 'hints',
@@ -18,6 +20,7 @@ const DEFAULTS = {
   showCosts: true,
   rememberKey: true,
   recent: [],
+  windowBounds: null,
 };
 
 class Settings {

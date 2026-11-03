@@ -207,6 +207,11 @@ function Problems() {
           <div className="problem" key={i}>
             <div className="problem-title">{ex.title}</div>
             <div className="problem-actions">
+              {/class (\S+) is public, should be declared in a file named/.test(p.message) && (
+                <button className="btn btn-sm btn-primary" onClick={() => A.renameToClass(p.file, p.message.match(/class (\S+) is public/)[1])}>
+                  {t('problems.rename', { name: p.message.match(/class (\S+) is public/)[1] + '.java' })}
+                </button>
+              )}
               {hasKey && (
                 <button className="btn btn-sm" onClick={() => A.aiFix(p)}>
                   <Icon name="spark" />
@@ -243,9 +248,14 @@ export default function Dock() {
   const tests = useStore((s) => s.tests);
   const paused = useStore((s) => s.debug && s.debug.paused);
   const recording = useStore((s) => s.recording);
+  const collapsed = useStore((s) => s.dockCollapsed);
+  // Switching to another tab (also automatically: input needed, errors, breakpoint) opens the dock.
+  useEffect(() => {
+    if (getState().dockCollapsed) setState({ dockCollapsed: false });
+  }, [dock]);
   const problemCount = (compile.state === 'errors' ? compile.problems.length : 0) + (exception ? 1 : 0);
   const tab = (id, label, count, bad) => (
-    <button className="tab" role="tab" aria-selected={dock === id} onClick={() => setState({ dock: id })}>
+    <button className="tab" role="tab" aria-selected={dock === id && !collapsed} onClick={() => setState({ dock: id, dockCollapsed: false })}>
       <span className="tab-label">{label}</span>
       {count != null && <span className={'count' + (bad ? ' bad' : '')}>{count}</span>}
     </button>
@@ -282,8 +292,11 @@ export default function Dock() {
             {t('ws.stop')}
           </button>
         )}
+        <button className="icon-btn" aria-label={collapsed ? t('dock.expand') : t('dock.collapse')} title={collapsed ? t('dock.expand') : t('dock.collapse')} onClick={() => setState({ dockCollapsed: !collapsed })}>
+          <Icon name="chevron" style={{ transform: collapsed ? 'rotate(180deg)' : 'none' }} />
+        </button>
       </div>
-      <div className="dock-body" style={{ display: 'flex', flexDirection: 'column' }}>
+      <div className="dock-body" style={{ display: collapsed ? 'none' : 'flex', flexDirection: 'column' }}>
         {dock === 'objects' && <div className="dock-body"><Bench /></div>}
         {dock === 'console' && <Console />}
         {dock === 'pad' && <CodePad />}

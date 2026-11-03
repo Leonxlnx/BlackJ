@@ -1,5 +1,5 @@
 // The only bridge between the window and the main process.
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const invoke = (channel) => (payload) => ipcRenderer.invoke(channel, payload);
 const listen = (channel) => (cb) => {
@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('blackj', {
     positions: invoke('project:positions'),
     reveal: invoke('project:reveal'),
     createPackage: invoke('project:createPackage'),
+    rename: invoke('project:rename'),
     exportJar: invoke('project:exportJar'),
   },
   compile: invoke('compile'),
@@ -56,6 +57,15 @@ contextBridge.exposeInMainWorld('blackj', {
     onEvent: listen('ai:event'),
   },
   windowTheme: invoke('window:theme'),
+  onOpenPath: listen('app:openPath'),
+  onProjectChanged: listen('project:changed'),
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file);
+    } catch {
+      return null;
+    }
+  },
   tests: {
     run: invoke('tests:run'),
   },
@@ -74,6 +84,8 @@ contextBridge.exposeInMainWorld('blackj', {
   openExternal: invoke('shell:open'),
   smoke: {
     capture: invoke('smoke:capture'),
+    resize: invoke('smoke:resize'),
+    writeFile: invoke('smoke:writeFile'),
     log: invoke('smoke:log'),
     done: invoke('smoke:done'),
   },

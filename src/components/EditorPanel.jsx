@@ -434,7 +434,29 @@ export default function EditorPanel() {
             if (!f) return null;
             const label = name === '#readme' ? f.className : A.simpleName(f.className);
             return (
-              <button key={name} className="tab" role="tab" aria-selected={name === active} title={name} onClick={() => A.openFile(name)} onMouseDown={(e) => e.button === 1 && A.closeTab(name)}>
+              <button
+                key={name}
+                className="tab"
+                role="tab"
+                aria-selected={name === active}
+                title={name}
+                onClick={() => A.openFile(name)}
+                onMouseDown={(e) => e.button === 1 && A.closeTab(name)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  const others = tabs.filter((x) => x !== name);
+                  A.openMenu({
+                    x: e.clientX,
+                    y: e.clientY,
+                    items: [
+                      { label: t('tab.close'), icon: 'close', onClick: () => { A.saveFile(name); A.closeTab(name); } },
+                      { label: t('tab.closeOthers'), disabled: !others.length, onClick: () => others.forEach((x) => { A.saveFile(x); A.closeTab(x); }) },
+                      { label: t('tab.closeAll'), onClick: () => tabs.forEach((x) => { A.saveFile(x); A.closeTab(x); }) },
+                      ...(name !== '#readme' ? [{ type: 'sep' }, { label: t('tab.showInDiagram'), icon: 'grid', onClick: () => { const f = files[name]; if (f.pkg !== getState().pkg) A.enterPackage(f.pkg); setState({ selectedClass: f.className }); } }] : []),
+                    ],
+                  });
+                }}
+              >
                 <span className="tab-label">{label}</span>
                 {A.isDirty(f) ? <span className="dirty" title={t('editor.unsaved')} /> : null}
                 <span className="tab-close" role="button" aria-label={t('common.close')} onClick={(e) => { e.stopPropagation(); A.saveFile(name); A.closeTab(name); }}>

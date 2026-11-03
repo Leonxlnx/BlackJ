@@ -1,5 +1,5 @@
 // BlackJ main process: the window, the project on disk, javac, the Java object bench and the AI tutor.
-const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Menu, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -121,8 +121,14 @@ function projectClasspath() {
 let debug = null;
 let breakpoints = {};
 
-async function attachDebugger() {
-  if (debug && debug.attached) return debug;
+let attaching = null;
+function attachDebugger() {
+  if (debug && debug.attached) return Promise.resolve(debug);
+  if (!attaching) attaching = doAttach().finally(() => { attaching = null; });
+  return attaching;
+}
+
+async function doAttach() {
   if (!bench.alive || !bench.jdwpPort) return null;
   const d = new Debugger();
   debug = d;
@@ -169,13 +175,57 @@ function buildDir(dir) {
   return path.join(app.getPath('userData'), 'build', id, 'classes');
 }
 
+// ------------------------------------------------------------------ outside changes
+// Files edited in another program (or synced by a teacher's folder) reach the window; it decides
+// whether to take them (only when the student has no unsaved changes in that file).
+
+let watcher = null;
+let watchTimer = null;
+const watchPending = new Set();
+
+function watchProject(dir) {
+  if (watcher) watcher.close();
+  watcher = null;
+  try {
+    watcher = fs.watch(dir, { recursive: true }, (_ev, file) => {
+      if (!file) return;
+      const rel = String(file).split(path.sep).join('/');
+      if (!rel.endsWith('.java') || rel.split('/').some((p) => p.startsWith('.') || p === '+libs')) return;
+      watchPending.add(rel);
+      clearTimeout(watchTimer);
+      watchTimer = setTimeout(flushWatch, 300);
+    });
+    watcher.on('error', () => {});
+  } catch { /* watching is a convenience */ }
+}
+
+function flushWatch() {
+  if (!state.dir) return;
+  for (const rel of watchPending) {
+    let full;
+    try {
+      full = project.safeFile(state.dir, rel);
+    } catch {
+      continue;
+    }
+    const pkg = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')).split('/').join('.') : '';
+    if (fs.existsSync(full)) {
+      try {
+        send('project:changed', { name: rel, className: rel.slice(0, -5).split('/').join('.'), pkg, content: fs.readFileSync(full, 'utf8') });
+      } catch { /* being written right now; the next event brings it */ }
+    } else send('project:changed', { name: rel, deleted: true });
+  }
+  watchPending.clear();
+}
+
 function openProject(dir) {
   const data = project.open(dir);
+  watchProject(data.dir);
   bench.stop();
   state.dir = data.dir;
   state.outDir = buildDir(data.dir);
   state.compiled = false;
-  if (!smokeDir) settings.addRecent(data.dir, data.name);
+  settings.addRecent(data.dir, data.name);
   return data;
 }
 
@@ -201,6 +251,7 @@ function registerIpc() {
     return {
       version: app.getVersion(),
       settings: settings.get(),
+      missingRecent: settings.get().recent.filter((r) => !fs.existsSync(r.dir)).map((r) => r.dir),
       jdk: state.jdk,
       jdks,
       examples: fs.existsSync(examplesDir) ? fs.readdirSync(examplesDir).filter((n) => fs.statSync(path.join(examplesDir, n)).isDirectory()) : [],
@@ -240,7 +291,8 @@ function registerIpc() {
 
   ipcMain.handle('project:open', (_e, dir) => wrap(() => {
     if (!fs.existsSync(dir)) throw Object.assign(new Error('missing'), { code: 'missing' });
-    return openProject(dir);
+    // A dropped .java file or package.bluej opens the folder it lives in.
+    return openProject(fs.statSync(dir).isFile() ? path.dirname(dir) : dir);
   }));
 
   ipcMain.handle('project:example', (_e, name) => wrap(() => {
@@ -289,6 +341,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('project:createPackage', (_e, { name }) => wrap(() => project.createPackage(state.dir, name)));
+  ipcMain.handle('project:rename', (_e, { from, to }) => wrap(() => project.renameFile(state.dir, from, to)));
 
   ipcMain.handle('tests:run', async (_e, { select }) => {
     if (!state.compiled) return fail({ code: 'notCompiled' });
@@ -386,6 +439,17 @@ function registerIpc() {
     fs.writeFileSync(file, img.toPNG());
     return file;
   });
+  ipcMain.handle('smoke:writeFile', (_e, { name, content }) => {
+    if (!smokeDir || !state.dir) return null;
+    fs.writeFileSync(project.safeFile(state.dir, name), content, 'utf8');
+    return true;
+  });
+  ipcMain.handle('smoke:resize', async (_e, { width, height }) => {
+    if (!smokeDir) return null;
+    win.setContentSize(width, height);
+    await new Promise((r) => setTimeout(r, 500));
+    return win.getContentSize();
+  });
   ipcMain.handle('smoke:log', (_e, line) => {
     if (smokeDir) fs.appendFileSync(path.join(smokeDir, 'smoke.log'), line + '\n');
   });
@@ -394,10 +458,49 @@ function registerIpc() {
   });
 }
 
+/** The last window size and position, if it still fits on one of the screens. */
+function savedBounds() {
+  const b = settings.get().windowBounds;
+  if (!b || smokeDir) return null;
+  const visible = screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return b.x + 120 < a.x + a.width && b.x + b.width - 120 > a.x && b.y >= a.y - 8 && b.y + 40 < a.y + a.height;
+  });
+  return visible ? b : null;
+}
+
+let boundsTimer = null;
+function rememberBounds() {
+  clearTimeout(boundsTimer);
+  boundsTimer = setTimeout(() => {
+    if (!win || win.isDestroyed() || win.isMinimized() || smokeDir) return;
+    const maximized = win.isMaximized();
+    const prev = settings.get().windowBounds || {};
+    settings.set({ windowBounds: maximized ? { ...prev, maximized: true } : { ...win.getNormalBounds(), maximized: false } });
+  }, 400);
+}
+
+/** Folders given on the command line or dropped on BlackJ.exe: a project folder, a .java file or a package.bluej. */
+function pathArgs(argv) {
+  const out = [];
+  for (const a of argv.slice(1)) {
+    if (!a || a.startsWith('-') || a === '.' || /electron(\.exe)?$/i.test(a)) continue;
+    try {
+      const p = path.resolve(a);
+      const st = fs.statSync(p);
+      if (st.isDirectory()) out.push(p);
+      else if (/\.(java|bluej)$/i.test(p)) out.push(path.dirname(p));
+    } catch { /* not a path */ }
+  }
+  return out;
+}
+
 function createWindow() {
+  const bounds = savedBounds();
   win = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: bounds ? bounds.width : 1440,
+    height: bounds ? bounds.height : 900,
+    ...(bounds ? { x: bounds.x, y: bounds.y } : {}),
     minWidth: 1024,
     minHeight: 640,
     show: false,
@@ -427,8 +530,16 @@ function createWindow() {
   win.webContents.on('before-input-event', (e, input) => {
     if (input.type === 'keyDown' && input.key === 'F12' && !app.isPackaged) win.webContents.toggleDevTools();
   });
+  for (const ev of ['resize', 'move', 'maximize', 'unmaximize']) win.on(ev, rememberBounds);
+  win.webContents.once('did-finish-load', () => {
+    const dirs = pathArgs(process.argv);
+    if (dirs[0] && !smokeDir) send('app:openPath', dirs[0]);
+  });
   win.once('ready-to-show', () => {
-    if (!smokeDir) return win.show();
+    if (!smokeDir) {
+      if (bounds && bounds.maximized) win.maximize();
+      return win.show();
+    }
     // Smoke test: a real, painted window, but placed off-screen and without focus.
     win.setPosition(-3200, 40);
     win.showInactive();
@@ -438,10 +549,12 @@ function createWindow() {
   win.on('closed', () => { win = null; });
 }
 
-app.on('second-instance', () => {
+app.on('second-instance', (_e, argv) => {
   if (win) {
     if (win.isMinimized()) win.restore();
     win.focus();
+    const dirs = pathArgs(argv);
+    if (dirs[0]) send('app:openPath', dirs[0]);
   }
 });
 

@@ -16,12 +16,13 @@ export default function TitleBar() {
   const selected = useStore((s) => s.selectedClass);
   const activeTab = useStore((s) => s.activeTab);
   const paused = useStore((s) => s.debug && s.debug.paused);
+  const tutorOpen = useStore((s) => s.tutorOpen);
   const model = useMemo(() => (project ? A.modelOf(files) : null), [files, project]);
   const mains = model ? model.list.filter((c) => c.hasMain) : [];
   const running = benchState === 'running' || benchState === 'waiting';
   const inProject = view === 'project' && project;
   const mainTarget = mains.find((c) => c.fileClass === selected) || mains.find((c) => c.file === activeTab) || mains[0];
-  const viewTitle = { home: t('nav.projects'), learn: t('nav.learn'), settings: t('nav.settings') }[view];
+  const viewTitle = { learn: t('nav.learn'), settings: t('nav.settings') }[view];
 
   return (
     <header className="titlebar">
@@ -40,7 +41,7 @@ export default function TitleBar() {
             ))}
           </nav>
         ) : (
-          <h1 className="tb-title">{viewTitle || 'BlackJ'}</h1>
+          <span className="tb-title">{viewTitle ? `BlackJ · ${viewTitle}` : 'BlackJ'}</span>
         )}
       </div>
 
@@ -54,9 +55,9 @@ export default function TitleBar() {
         {inProject && (
           <>
             {running || paused ? (
-              <button className="btn btn-sm" onClick={A.stopProgram}>
+              <button className="btn btn-sm" onClick={A.stopProgram} title={t('ws.stop')}>
                 <Icon name="stop" />
-                {t('ws.stop')}
+                <span className="tb-label">{t('ws.stop')}</span>
               </button>
             ) : (
               mains.length > 0 && (
@@ -72,14 +73,17 @@ export default function TitleBar() {
                   }}
                 >
                   <Icon name="play" />
-                  {t('ws.runMain')}
+                  <span className="tb-label">{t('ws.runMain')}</span>
                   {mains.length > 1 && <Icon name="chevron" />}
                 </button>
               )
             )}
-            <button className="btn btn-sm btn-primary" onClick={A.compile} disabled={compileState === 'compiling'} title="Strg+K">
+            <button className="btn btn-sm btn-primary" onClick={A.compile} disabled={compileState === 'compiling'} title={t('ws.compile') + ' · Strg+K'}>
               <Icon name="build" />
-              {compileState === 'compiling' ? t('ws.compiling') : t('ws.compile')}
+              <span className="tb-label">{compileState === 'compiling' ? t('ws.compiling') : t('ws.compile')}</span>
+            </button>
+            <button className={'icon-btn tb-toggle' + (tutorOpen ? ' on' : '')} aria-pressed={tutorOpen} aria-label={t('ws.sidePanel')} title={t('ws.sidePanel') + ' · Strg+Umschalt+L'} onClick={A.toggleTutor}>
+              <Icon name="sidebar" />
             </button>
           </>
         )}

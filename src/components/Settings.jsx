@@ -98,6 +98,9 @@ export default function Settings() {
           <Row title={t('settings.scopeColors')} desc={t('settings.scopeColorsText')}>
             <Switch checked={s.scopeColors} onChange={(v) => set({ scopeColors: v })} label={t('settings.scopeColors')} />
           </Row>
+          <Row title={t('settings.clearConsole')} desc={t('settings.clearConsoleText')}>
+            <Switch checked={!!s.clearConsoleOnCall} onChange={(v) => set({ clearConsoleOnCall: v })} label={t('settings.clearConsole')} />
+          </Row>
           <Row title={t('settings.aiInline')} desc={t('settings.aiInlineText')}>
             <Switch checked={s.aiInline} onChange={(v) => set({ aiInline: v })} label={t('settings.aiInline')} />
           </Row>

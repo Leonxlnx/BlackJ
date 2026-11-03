@@ -89,38 +89,62 @@ export default function Workspace() {
   useEffect(() => store('diagramW', diagramW), [diagramW]);
   useEffect(() => store('tutorW', tutorW), [tutorW]);
   useEffect(() => store('dockH', dockH), [dockH]);
-
   useEffect(() => {
-    const fit = () => {
-      const el = bodyRef.current;
-      if (!el) return;
-      const w = el.clientWidth;
-      const h = el.clientHeight;
-      setDiagramW((v) => Math.min(Math.max(280, v), Math.max(280, w - (tutorOpen ? tutorW + 12 : 0) - 380)));
-      setDockH((v) => Math.min(Math.max(150, v), Math.max(150, h - 240)));
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        A.toggleTutor();
+      }
     };
-    fit();
-    window.addEventListener('resize', fit);
-    return () => window.removeEventListener('resize', fit);
-  }, [tutorOpen, tutorW]);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Layout follows the space we really have: on small school screens the side panel floats
+  // over the editor as a drawer, and the stored widths shrink so the editor keeps 360px.
+  const [size, setSize] = useState({ w: 1400, h: 820 });
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver(([entry]) => setSize({ w: Math.round(entry.contentRect.width), h: Math.round(entry.contentRect.height) }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const drawer = size.w < 1240;
+  const dockCollapsed = useStore((s) => s.dockCollapsed);
+  useEffect(() => {
+    if (drawer) setState({ tutorOpen: false });
+  }, [drawer]);
+  const sideW = Math.min(tutorW, Math.round(size.w * (drawer ? 0.6 : 0.32)));
+  const mainW = size.w - (tutorOpen && !drawer ? sideW + 12 : 0);
+  const dW = Math.max(240, Math.min(diagramW, Math.round(mainW * 0.45), mainW - 12 - 400));
+  const dH = dockCollapsed ? 44 : Math.max(140, Math.min(dockH, Math.round(size.h * 0.36)));
 
   return (
     <div className="ws">
       {project.readOnly && <div className="ws-banner">{t('ws.readOnly')}</div>}
-      <div className="ws-body" ref={bodyRef} style={{ gridTemplateColumns: tutorOpen ? `minmax(0,1fr) 12px ${tutorW}px` : 'minmax(0,1fr)' }}>
-        <div className="ws-cols" style={{ gridTemplateRows: `minmax(0,1fr) 12px ${dockH}px` }}>
-          <div className="ws-cols" style={{ gridTemplateColumns: `${diagramW}px 12px minmax(0,1fr)` }}>
+      <div className="ws-body" ref={bodyRef} style={{ gridTemplateColumns: tutorOpen && !drawer ? `minmax(0,1fr) 12px ${sideW}px` : 'minmax(0,1fr)' }}>
+        <div className="ws-cols" style={{ gridTemplateRows: `minmax(0,1fr) 12px ${dH}px` }}>
+          <div className="ws-cols" style={{ gridTemplateColumns: `${dW}px 12px minmax(0,1fr)` }}>
             <Diagram model={model} />
-            <Splitter onDrag={(dx) => setDiagramW((v) => Math.max(280, v + dx))} />
+            <Splitter onDrag={(dx) => setDiagramW(() => Math.max(240, dW + dx))} />
             <EditorPanel model={model} />
           </div>
-          <Splitter vertical onDrag={(dy) => setDockH((v) => Math.max(150, v - dy))} />
+          <Splitter vertical onDrag={(dy) => { if (dockCollapsed) setState({ dockCollapsed: false }); setDockH(() => Math.max(140, dH - dy)); }} />
           <Dock model={model} />
         </div>
-        {tutorOpen && (
+        {tutorOpen && !drawer && (
           <>
-            <Splitter onDrag={(dx) => setTutorW((v) => Math.min(680, Math.max(300, v - dx)))} />
+            <Splitter onDrag={(dx) => setTutorW(() => Math.min(680, Math.max(300, sideW - dx)))} />
             <SidePanel />
+          </>
+        )}
+        {tutorOpen && drawer && (
+          <>
+            <div className="drawer-scrim" onPointerDown={A.toggleTutor} />
+            <div className="side-drawer" style={{ width: Math.max(320, sideW) }}>
+              <SidePanel />
+            </div>
           </>
         )}
       </div>
