@@ -6,6 +6,23 @@
 
 <p align="center"><a href="../../releases/latest"><b>⬇ BlackJ.exe herunterladen</b></a> · Windows · keine Installation nötig · läuft auch vom USB-Stick</p>
 
+<p align="center"><img src="docs/screenshots/workspace.png" alt="BlackJ: Klassendiagramm, Editor, Objektbank und Inspektor" width="900"></p>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/debugger.png" alt="Debugger mit Haltepunkt, Aufrufen und Variablen"><br><sub>Debugger: Haltepunkte, Schritt für Schritt, alle Variablen</sub></td>
+<td width="50%"><img src="docs/screenshots/code-pad.png" alt="Code Pad"><br><sub>Code Pad: Java eintippen, Wert sehen, Fehler erklärt</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/tests.png" alt="JUnit-Tests"><br><sub>JUnit 4 und 5, Testmethoden aufzeichnen</sub></td>
+<td><img src="docs/screenshots/ai-diff.png" alt="KI-Vorschlag als Vergleich"><br><sub>KI schlägt vor, du entscheidest (Vergleich vor dem Übernehmen)</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/packages.png" alt="Pakete im Klassendiagramm"><br><sub>Pakete wie in BlueJ</sub></td>
+<td><img src="docs/screenshots/light.png" alt="Helles Design"><br><sub>Helles und dunkles Design</sub></td>
+</tr>
+</table>
+
 ---
 
 ## Was BlackJ kann
@@ -26,7 +43,8 @@
 - Moderner Editor (Monaco, der Editor aus VS Code) mit Autovervollständigung für eigene Klassen, Snippets (`sout`, `fori`, `get`, `set`, `test`) und Erklärungen beim Überfahren von Schlüsselwörtern
 - Jeder Compilerfehler und jede Exception wird auf Deutsch erklärt, mit Tipp zur Lösung
 - Live-Inspektor neben dem Code, Objektkarten zeigen ihre Attributwerte
-- Befehlspalette (`Strg+P`) für Klassen, Methoden, Befehle und Lernbegriffe
+- Befehlspalette (`Strg+P`) für Klassen, Methoden, Befehle und Lernbegriffe, Tastenkürzel-Übersicht mit `F1`
+- Passt sich kleinen Schulbildschirmen an (1280×720), Projekte per Drag & Drop öffnen, Änderungen von außen werden übernommen
 - Lernen-Seite mit den wichtigsten OOP-Begriffen und Beispielen
 - Dunkles und helles Design, Deutsch und Englisch
 
@@ -53,6 +71,8 @@
 | `F9` | Haltepunkt |
 | `F8` / `F10` / `F11` | Weiter / Schritt / Hinein |
 | `Strg+S` | Speichern |
+| `Strg+Umschalt+L` | KI-Tutor / Inspektor ein-aus |
+| `F1` | Alle Tastenkürzel |
 
 ## Selbst bauen
 

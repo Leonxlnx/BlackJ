@@ -193,7 +193,7 @@ export default function Diagram({ model }) {
   // The README note (root) or the "parent package" card sits above the top-left of the content.
   const minX0 = keys.length ? Math.min(...keys.map((k) => pos(k).x)) : 32;
   const minY0 = keys.length ? Math.min(...keys.map((k) => pos(k).y)) : 32;
-  const noteAt = { x: minX0, y: minY0 - 76 };
+  const noteAt = { x: minX0, y: minY0 - 96 };
   const hasNote = (readme && !pkg) || !!pkg;
   const fit = () => {
     const host = hostRef.current;
@@ -205,7 +205,7 @@ export default function Diagram({ model }) {
     const minX = Math.min(...xs) - 24;
     const minY = Math.min(...ys) - 24;
     const w = Math.max(...x2) - minX + 24;
-    const h = Math.max(...y2) - minY + 56;
+    const h = Math.max(...y2) - minY + 76;
     const k = Math.min(1, Math.max(0.55, Math.min(host.clientWidth / w, host.clientHeight / h)));
     setView({ k, x: (host.clientWidth - w * k) / 2 - minX * k, y: Math.max(0, (host.clientHeight - h * k) / 2) - minY * k });
   };
