@@ -1,10 +1,11 @@
 // One small global store. Components read slices with useStore(selector).
 import { useSyncExternalStore } from 'react';
+import { defaultLayout } from './lib/layout.js';
 
 let state = {
   ready: false,
   info: null,
-  settings: { lang: 'de', theme: 'dark', fontSize: 14, hoverHelp: true, autosave: true, diagramDetails: true, scopeColors: true, aiInline: true, model: 'claude-opus-5-5', tutorMode: 'hints', sendContext: true, showCosts: true, rememberKey: true, recent: [] },
+  settings: { lang: 'de', theme: 'dark', fontSize: 14, hoverHelp: true, autosave: true, diagramDetails: true, scopeColors: true, aiInline: true, model: 'claude-opus-5-5', tutorMode: 'hints', sendContext: true, agentWrite: false, showCosts: false, rememberKey: true, recent: [] },
   pkg: '',
   pad: { entries: [], vars: [], busy: false },
   tests: { running: false, summary: null, results: [] },
@@ -28,7 +29,12 @@ let state = {
   reveal: null,
   dock: 'objects',
   tutorOpen: true,
-  chat: { turns: [], busy: false, mode: 'hints' },
+  layout: { tree: defaultLayout(), detached: [] },
+  activeWin: 'main',
+  chat: { turns: [], busy: false, mode: 'hints', notes: [], hiddenChips: {} },
+  agent: { proposals: {} },
+  tour: null,
+  lastTour: null,
   dialog: null,
   menu: null,
   toast: null,
@@ -37,6 +43,9 @@ let state = {
 };
 
 const listeners = new Set();
+// One observer of every change with the patch and the state before it (panels.js keeps pop-out
+// windows in step through it).
+let patchHook = null;
 
 export function getState() {
   return state;
@@ -44,11 +53,17 @@ export function getState() {
 
 export function setState(patch) {
   const next = typeof patch === 'function' ? patch(state) : patch;
+  const prev = state;
   state = { ...state, ...next };
+  if (patchHook && next) patchHook(next, prev);
   for (const l of listeners) l();
 }
 
-function subscribe(l) {
+export function onPatch(fn) {
+  patchHook = fn;
+}
+
+export function subscribe(l) {
   listeners.add(l);
   return () => listeners.delete(l);
 }

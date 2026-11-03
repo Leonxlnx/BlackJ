@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore, setState, getState } from '../store.js';
 import { useT, translate } from '../i18n.js';
-import * as A from '../actions.js';
+import A, { PANEL } from '../panels.js';
 import { explainProblem } from '../lib/errors.js';
 import { explainException } from '../lib/exceptions.js';
 import Icon, { Why } from './Icon.jsx';
 import CodePad from './CodePad.jsx';
 import TestsPanel from './TestsPanel.jsx';
 import DebugPanel from './DebugPanel.jsx';
+import PopOut from './PopOut.jsx';
 
 function methodLabel(m) {
   return (
@@ -31,21 +32,26 @@ export async function objectMenu(obj, x, y) {
       if (!groups.has(g)) groups.set(g, []);
       groups.get(g).push(m);
     }
+    const seen = new Set();
     for (const [g, list] of groups) {
       if (g) {
         items.push({ type: 'sep' });
         items.push({ type: 'label', text: t('menu.inheritedFrom', { cls: A.simpleName(g) }) });
       }
-      for (const m of list) items.push({ label: methodLabel(m), onClick: () => A.openDialogBox({ type: 'call', kind: m.static ? 'static' : 'method', cls: obj.className, target: obj.name, method: m }) });
+      for (const m of list) {
+        const tour = seen.has(m.name) ? undefined : 'method:' + m.name;
+        seen.add(m.name);
+        items.push({ label: methodLabel(m), tour, onClick: () => A.openDialogBox({ type: 'call', kind: m.static ? 'static' : 'method', cls: obj.className, target: obj.name, method: m }) });
+      }
     }
     items.push({ type: 'sep' });
   } else if (obj.className && obj.value && obj.value.kind !== 'null' && obj.value.kind !== 'array') {
     // A library object (String, ArrayList, Random …): its methods in a searchable list.
-    items.push({ label: t('menu.libMethods'), onClick: () => A.openDialogBox({ type: 'library', target: obj.name, cls: obj.className, typeLabel: obj.type }) });
+    items.push({ label: t('menu.libMethods'), tour: 'libMethods', onClick: () => A.openDialogBox({ type: 'library', target: obj.name, cls: obj.className, typeLabel: obj.type }) });
     items.push({ type: 'sep' });
   }
-  items.push({ label: t('menu.inspect'), onClick: () => A.showInspector(obj.name, obj.name) });
-  items.push({ label: t('menu.remove'), onClick: () => A.removeObject(obj.name) });
+  items.push({ label: t('menu.inspect'), tour: 'inspect', onClick: () => A.showInspector(obj.name, obj.name) });
+  items.push({ label: t('menu.remove'), tour: 'remove', onClick: () => A.removeObject(obj.name) });
   A.openMenu({ x, y, items });
 }
 
@@ -57,16 +63,17 @@ function Bench() {
   const inspected = useStore((s) => s.inspect && s.inspect.ref);
   if (!objects.length) {
     return (
-      <div className="dock-empty">
+      <div className="dock-empty" data-tour="bench">
         <div className="empty-line">{benchState === 'off' ? <>{t('bench.emptyNotCompiled')} <kbd>{t('bench.compileKey')}</kbd></> : t('bench.empty')}</div>
       </div>
     );
   }
   return (
-    <div className="bench">
+    <div className="bench" data-tour="bench">
       {objects.map((o) => (
         <div
           key={o.name}
+          data-tour={'object:' + o.name}
           className={'obj' + (o.name === lastNew ? ' new' : '') + (o.name === inspected ? ' inspected' : '')}
           role="button"
           tabIndex={0}
@@ -149,6 +156,7 @@ function Console() {
       </div>
       <form
         className={'console-input' + (waiting ? ' waiting' : '')}
+        data-tour="console-input"
         onSubmit={(e) => {
           e.preventDefault();
           A.sendInput(text);
@@ -183,7 +191,7 @@ function Problems() {
       {exception && (() => {
         const ex = explainException(exception.simpleType, lang);
         return (
-          <div className="problem">
+          <div className="problem" data-tour="problem:1">
             <div className="problem-title">
               <span className="pill pill-neg">{exception.simpleType}</span>
               {ex.title}
@@ -214,7 +222,7 @@ function Problems() {
       {problems.map((p, i) => {
         const ex = explainProblem(p, lang);
         return (
-          <div className="problem" key={i}>
+          <div className="problem" key={i} data-tour={'problem:' + (i + 1 + (exception ? 1 : 0))}>
             <div className="problem-title">{ex.title}</div>
             <div className="problem-actions">
               {/class (\S+) is public, should be declared in a file named/.test(p.message) && (
@@ -269,23 +277,74 @@ export default function Dock() {
     if (getState().dockCollapsed) setState({ dockCollapsed: false });
   }, [dock]);
   const problemCount = (compile.state === 'errors' ? compile.problems.length : 0) + (exception ? 1 : 0);
+  // In a narrow column the strip scrolls (wheel too) under a fade, and the tabs that do not fit
+  // are also in a "…" menu, so moving the dock never hides a feature.
+  const tabsRef = useRef(null);
+  const [hidden, setHidden] = useState([]);
+  const updateStrip = () => {
+    const el = tabsRef.current;
+    if (!el) return;
+    el.classList.toggle('fade-l', el.scrollLeft > 1);
+    el.classList.toggle('fade-r', el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+    const box = el.getBoundingClientRect();
+    const out = [...el.querySelectorAll('.tab')].filter((b) => {
+      const r = b.getBoundingClientRect();
+      return r.left < box.left - 1 || r.right > box.right + 1;
+    }).map((b) => b.dataset.tour.slice(5));
+    setHidden((prev) => (prev.join() === out.join() ? prev : out));
+  };
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver(updateStrip);
+    ro.observe(el);
+    const wheel = (e) => {
+      if (el.scrollWidth <= el.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener('wheel', wheel, { passive: false });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener('wheel', wheel);
+    };
+  }, []);
+  useEffect(() => {
+    const el = tabsRef.current && tabsRef.current.querySelector('.tab[aria-selected="true"]');
+    if (el) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    updateStrip();
+  }, [dock, collapsed, objects.length, problemCount, tests.summary, paused]);
+  const labels = { objects: t('dock.objects'), console: t('dock.console'), pad: t('dock.pad'), tests: t('dock.tests'), problems: t('dock.problems'), debug: t('dock.debug') };
   const tab = (id, label, count, bad) => (
-    <button className="tab" role="tab" aria-selected={dock === id && !collapsed} onClick={() => setState({ dock: id, dockCollapsed: false })}>
+    <button className="tab" role="tab" data-tour={'dock:' + id} aria-selected={dock === id && !collapsed} onClick={() => setState({ dock: id, dockCollapsed: false })}>
       <span className="tab-label">{label}</span>
       {count != null && <span className={'count' + (bad ? ' bad' : '')}>{count}</span>}
     </button>
   );
   return (
-    <section className="panel" aria-label={t('dock.objects')}>
+    <section className="panel dock-panel" aria-label={t('dock.objects')}>
       <div className="panel-head">
-        <div className="tabs" role="tablist">
-          {tab('objects', t('dock.objects'), objects.length)}
+        <div className="tabs" role="tablist" ref={tabsRef} onScroll={updateStrip}>
+          {tab('objects', t('dock.objects'), objects.length || null)}
           {tab('console', t('dock.console'), null)}
           {tab('pad', t('dock.pad'), null)}
           {tab('tests', t('dock.tests'), tests.summary ? `${tests.summary.passed}/${tests.summary.total}` : null, tests.summary && tests.summary.failed > 0)}
           {tab('problems', t('dock.problems'), problemCount || null, problemCount > 0)}
           {tab('debug', t('dock.debug'), paused ? '●' : null, !!paused)}
         </div>
+        {hidden.length > 0 && (
+          <button
+            className="icon-btn dock-more"
+            aria-label={t('dock.more')}
+            title={t('dock.more')}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              A.openMenu({ x: r.left, y: r.bottom + 4, items: hidden.map((id) => ({ label: labels[id], onClick: () => setState({ dock: id, dockCollapsed: false }) })) });
+            }}
+          >
+            <Icon name="more" />
+          </button>
+        )}
         <span className="grow" />
         {recording && (
           <>
@@ -295,27 +354,28 @@ export default function Dock() {
           </>
         )}
         {!recording && dock === 'objects' && (
-          <button className="btn btn-sm btn-quiet" onClick={() => A.openDialogBox({ type: 'library' })} title={t('lib.text')}>
+          <button className="btn btn-sm btn-quiet" data-tour="library" onClick={() => A.openDialogBox({ type: 'library' })} title={t('lib.text')}>
             <Icon name="book" />
-            {t('lib.short')}
+            <span className="wide-only">{t('lib.short')}</span>
           </button>
         )}
         {!recording && dock === 'objects' && objects.length > 0 && (
           <button className="btn btn-sm btn-quiet" onClick={A.stopProgram}>
             <Icon name="reset" />
-            {t('ws.reset')}
+            <span className="wide-only">{t('ws.reset')}</span>
           </button>
         )}
         {dock === 'console' && consoleLines > 0 && <button className="btn btn-sm btn-quiet" onClick={A.clearConsole}>{t('console.clear')}</button>}
         {(benchState === 'running' || benchState === 'waiting') && dock !== 'debug' && (
           <button className="btn btn-sm" onClick={A.stopProgram}>
             <Icon name="stop" />
-            {t('ws.stop')}
+            <span className="wide-only">{t('ws.stop')}</span>
           </button>
         )}
-        <button className="icon-btn" aria-label={collapsed ? t('dock.expand') : t('dock.collapse')} title={collapsed ? t('dock.expand') : t('dock.collapse')} onClick={() => setState({ dockCollapsed: !collapsed })}>
+        <PopOut panel="dock" />
+        {!PANEL && <button className="icon-btn" aria-label={collapsed ? t('dock.expand') : t('dock.collapse')} title={collapsed ? t('dock.expand') : t('dock.collapse')} onClick={() => setState({ dockCollapsed: !collapsed })}>
           <Icon name={collapsed ? 'chevronUp' : 'chevron'} />
-        </button>
+        </button>}
       </div>
       <div className="dock-body" style={{ display: collapsed ? 'none' : 'flex', flexDirection: 'column' }}>
         {dock === 'objects' && <div className="dock-body"><Bench /></div>}

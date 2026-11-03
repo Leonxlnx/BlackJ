@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { useStore, getState, setState } from './store.js';
 import * as A from './actions.js';
 import TitleBar from './components/TitleBar.jsx';
-import StatusBar from './components/StatusBar.jsx';
 import Rail from './components/Rail.jsx';
 import Home from './components/Home.jsx';
 import Workspace from './components/Workspace.jsx';
@@ -13,13 +12,15 @@ import Dialogs from './components/Dialogs.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 import ShortcutsDialog from './components/ShortcutsDialog.jsx';
+import Tour from './components/Tour.jsx';
 import { api } from './api.js';
 
 export default function App() {
   const ready = useStore((s) => s.ready);
   const view = useStore((s) => s.view);
   const project = useStore((s) => s.project);
-  const toast = useStore((s) => s.toast);
+  // While a pop-out window is in front, its toasts show there.
+  const toast = useStore((s) => ((s.activeWin || 'main') === 'main' ? s.toast : null));
   const dropping = useStore((s) => s.dropping);
 
   useEffect(() => {
@@ -64,6 +65,8 @@ export default function App() {
         else if (s.dialog) A.closeDialog();
         else if (s.shortcuts) setState({ shortcuts: false });
         else if (s.aiPrompt) setState({ aiPrompt: null });
+        else if (s.aiBusy) A.stopEdit();
+        else if (s.tour) A.endTour('escape');
         return;
       }
       if (mod && key === 'p') {
@@ -126,12 +129,12 @@ export default function App() {
           </ErrorBoundary>
         </main>
       </div>
-      <StatusBar />
       <Menu />
       <ErrorBoundary>
         <Dialogs />
       </ErrorBoundary>
       <CommandPalette />
+      <Tour />
       <ShortcutsDialog />
       {dropping && (
         <div className="drop-hint" aria-hidden="true">

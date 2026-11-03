@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Menu, screen } 
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
 const { findJdks, asJdk } = require('./jdk.cjs');
 const { compile } = require('./compiler.cjs');
 const { Bench } = require('./bench.cjs');
@@ -10,6 +11,7 @@ const project = require('./project.cjs');
 const zip = require('./zip.cjs');
 const { Settings } = require('./settings.cjs');
 const { Tutor } = require('./ai.cjs');
+const { pathsOf } = require('./agent-tools.cjs');
 const tests = require('./tests.cjs');
 const { Debugger } = require('./debugger.cjs');
 
@@ -268,6 +270,61 @@ async function wrap(fn) {
   }
 }
 
+// ------------------------------------------------------------------ the tutor's tools
+// The window carries out every tool call (it owns the editor, the bench and the overlay); the main
+// process only checks the paths again and waits for the answer.
+
+const pendingTools = new Map(); // callId -> { resolve }
+
+/** How long a tool may take. Writes wait for the student's decision, so they have no limit. */
+function toolTimeout(call) {
+  const name = call.name;
+  if (name === 'compile') return 120000;
+  if (name === 'run_tests') return 150000;
+  if (name === 'run_main') return ((call.input && call.input.timeout_s) || 10) * 1000 + 15000;
+  if (name === 'create_object' || name === 'call_method') return 40000;
+  if (['write_file', 'edit_file', 'create_class', 'delete_class'].includes(name)) return 0;
+  return 15000;
+}
+
+async function runAgentTool(call, { signal }) {
+  if (!win || win.isDestroyed()) return { content: 'BlackJ window is closed.', isError: true };
+  if (signal.aborted) return { content: 'Stopped by the student.', isError: true };
+  if (!state.dir && call.name !== 'get_project') return { content: 'No project is open.', isError: true };
+  // Same confinement as the project IPC (project.safeFile); agent-tools.cjs already did the lexical check.
+  for (const p of pathsOf(call.name, call.input)) {
+    try {
+      project.safeFile(state.dir, p);
+    } catch {
+      return { content: `Path not allowed: ${p}`, isError: true };
+    }
+  }
+  return new Promise((resolve) => {
+    let timer = null;
+    const done = (r) => {
+      clearTimeout(timer);
+      pendingTools.delete(call.callId);
+      signal.removeEventListener('abort', onAbort);
+      resolve(r);
+    };
+    const onAbort = () => done({ content: 'Stopped by the student.', isError: true });
+    const ms = toolTimeout(call);
+    if (ms) {
+      timer = setTimeout(() => {
+        send('ai:event', { turnId: call.turnId, type: 'toolCancel', callIds: [call.callId], reason: 'timeout' });
+        done({ content: 'BlackJ did not answer in time.', isError: true });
+      }, ms);
+    }
+    pendingTools.set(call.callId, { resolve: done });
+    signal.addEventListener('abort', onAbort, { once: true });
+    send('ai:tool', call);
+  });
+}
+
+function settleTools(content) {
+  for (const p of [...pendingTools.values()]) p.resolve({ content, isError: true });
+}
+
 // ------------------------------------------------------------------ IPC
 
 function registerIpc() {
@@ -289,7 +346,9 @@ function registerIpc() {
   });
 
   ipcMain.handle('settings:set', (_e, patch) => {
-    const s = settings.set(patch);
+    // Window geometry is written here only; a renderer never needs to (and must not) set it.
+    const { windowBounds, panelBounds, ...rest } = patch && typeof patch === 'object' ? patch : {};
+    const s = settings.set(rest);
     if (patch && 'jdkPath' in patch) chooseJdk();
     return s;
   });
@@ -564,18 +623,56 @@ function registerIpc() {
     tutor.send(req).catch((err) => send('ai:event', { turnId: req.turnId, type: 'error', code: err.code || 'unknown', message: String(err.message) }));
     return true;
   });
+  ipcMain.handle('ai:continue', (_e, req) => {
+    tutor.continue(req).catch((err) => send('ai:event', { turnId: req.turnId, type: 'error', code: err.code || 'unknown', message: String(err.message) }));
+    return true;
+  });
+  ipcMain.handle('ai:toolResult', (_e, { callId, content, isError }) => {
+    const p = pendingTools.get(callId);
+    if (p) p.resolve({ content: String(content ?? ''), isError: !!isError });
+    return true;
+  });
   ipcMain.handle('ai:stop', () => tutor.stop());
   ipcMain.handle('ai:complete', (_e, req) => tutor.complete(req));
   ipcMain.handle('ai:edit', (_e, req) => wrap(() => tutor.edit(req)));
+  ipcMain.handle('ai:editStop', () => tutor.stopEdit());
 
-  // The window draws its own title bar; the native buttons follow the app's theme.
-  ipcMain.handle('window:theme', (_e, theme) => {
-    if (!win || process.platform !== 'win32') return;
+  // Each window draws its own title bar; the native buttons follow the app's theme.
+  ipcMain.handle('window:theme', (e, theme) => {
+    const w = BrowserWindow.fromWebContents(e.sender);
+    if (!w || process.platform !== 'win32') return;
     const dark = theme !== 'light';
     try {
-      win.setTitleBarOverlay({ color: dark ? '#0a0a0b' : '#ebebed', symbolColor: dark ? '#adadb3' : '#4d4d55', height: 44 });
-      win.setBackgroundColor(dark ? '#0a0a0b' : '#ebebed');
+      w.setTitleBarOverlay(overlayFor(theme));
+      w.setBackgroundColor(dark ? '#0a0a0b' : '#ebebed');
     } catch { /* overlay not available */ }
+  });
+
+  // Pop-out windows (src/panels.js): the main window owns the state, this only relays messages.
+  ipcMain.handle('panel:open', (e, opts) => (isMain(e) ? openPanel(opts || {}) : false));
+  ipcMain.handle('panel:close', (e, { panel } = {}) => {
+    const w = isMain(e) && panels.get(panel);
+    if (w && !w.isDestroyed()) w.close();
+  });
+  ipcMain.handle('panel:show', (_e, { panel } = {}) => {
+    const w = panels.get(panel);
+    if (!w || w.isDestroyed()) return;
+    if (w.isMinimized()) w.restore();
+    w.showInactive();
+    w.moveTop();
+  });
+  ipcMain.handle('panel:focusMain', () => {
+    if (win && !win.isDestroyed() && !smokeDir) win.focus();
+  });
+  ipcMain.on('panel:send', (e, msg) => {
+    if (!msg || typeof msg !== 'object') return;
+    if (isMain(e)) {
+      const w = panels.get(msg.to);
+      if (w && !w.isDestroyed()) w.webContents.send('panel:message', msg);
+      return;
+    }
+    const from = panelOf(e.sender);
+    if (from) send('panel:message', { ...msg, from });
   });
 
   const allowed = ['https://console.anthropic.com', 'https://platform.claude.com', 'https://adoptium.net', 'https://www.bluej.org', 'https://docs.oracle.com', 'https://dev.java'];
@@ -584,16 +681,25 @@ function registerIpc() {
   });
 
   // Smoke test: the renderer drives a scripted session and asks for screenshots.
-  ipcMain.handle('smoke:capture', async (_e, name) => {
+  ipcMain.handle('smoke:capture', async (_e, arg) => {
     if (!smokeDir) return null;
+    const { name, panel } = typeof arg === 'string' ? { name: arg } : arg;
+    const target = panel ? panels.get(panel) : win;
+    if (!target || target.isDestroyed()) return null;
     // The off-screen window paints lazily: the first capture returns the previous frame.
-    win.webContents.invalidate();
-    await win.webContents.capturePage();
+    target.webContents.invalidate();
+    await target.webContents.capturePage();
     await new Promise((r) => setTimeout(r, 250));
-    const img = await win.webContents.capturePage();
-    const file = path.join(smokeDir, name + '.png');
+    const img = await target.webContents.capturePage();
+    const file = path.join(smokeDir, path.basename(name) + '.png');
     fs.writeFileSync(file, img.toPNG());
     return file;
+  });
+  // Smoke test only: run a line of script in a pop-out window (type into its editor, read it back).
+  ipcMain.handle('smoke:panelEval', async (_e, { panel, code }) => {
+    const w = smokeDir && panels.get(panel);
+    if (!w || w.isDestroyed()) return null;
+    return w.webContents.executeJavaScript(String(code), true);
   });
   ipcMain.handle('smoke:writeFile', (_e, { name, content }) => {
     if (!smokeDir || !state.dir) return null;
@@ -614,15 +720,147 @@ function registerIpc() {
   });
 }
 
-/** The last window size and position, if it still fits on one of the screens. */
-function savedBounds() {
-  const b = settings.get().windowBounds;
-  if (!b || smokeDir) return null;
-  const visible = screen.getAllDisplays().some((d) => {
+/** True when a window with these bounds would show its title bar on one of the screens. */
+function onScreen(b) {
+  return !!b && screen.getAllDisplays().some((d) => {
     const a = d.workArea;
     return b.x + 120 < a.x + a.width && b.x + b.width - 120 > a.x && b.y >= a.y - 8 && b.y + 40 < a.y + a.height;
   });
-  return visible ? b : null;
+}
+
+/** Only the geometry of stored bounds, when every value is a number; anything else is dropped. */
+function geometry(b) {
+  return b && ['x', 'y', 'width', 'height'].every((k) => Number.isFinite(b[k])) ? { x: b.x, y: b.y, width: b.width, height: b.height } : null;
+}
+
+/** The last window size and position, if it still fits on one of the screens. */
+function savedBounds() {
+  const stored = settings.get().windowBounds;
+  const b = geometry(stored);
+  if (!b || smokeDir) return null;
+  return onScreen(b) ? { ...b, maximized: stored.maximized === true } : null;
+}
+
+const overlayFor = (theme) => (theme === 'light' ? { color: '#ebebed', symbolColor: '#4d4d55', height: 44 } : { color: '#0a0a0b', symbolColor: '#adadb3', height: 44 });
+
+/** What every BlackJ window shares: the frameless look in the theme's colours and a locked-down renderer. */
+function windowOptions() {
+  const theme = settings.get().theme;
+  return {
+    show: false,
+    backgroundColor: theme === 'light' ? '#ebebed' : '#0a0a0b',
+    title: 'BlackJ',
+    // Windows draws the taskbar button from the .ico, which has every size on its own grid.
+    icon: path.join(resDir, process.platform === 'win32' && fs.existsSync(path.join(resDir, 'icon.ico')) ? 'icon.ico' : 'icon.png'),
+    autoHideMenuBar: true,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: overlayFor(theme),
+    skipTaskbar: !!smokeDir,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+      backgroundThrottling: !smokeDir,
+    },
+  };
+}
+
+const ENTRY = process.env.BLACKJ_DEV ? 'http://localhost:5291/' : pathToFileURL(path.join(__dirname, '..', 'dist', 'index.html')).href;
+
+/** True for the app's own page (any query); a link to anything else must never replace it. */
+function isEntry(url) {
+  try {
+    const u = new URL(url);
+    u.search = '';
+    u.hash = '';
+    return u.href === ENTRY;
+  } catch {
+    return false;
+  }
+}
+
+function guard(w) {
+  w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  w.webContents.on('will-navigate', (e, url) => {
+    if (!isEntry(url)) e.preventDefault();
+  });
+  w.webContents.on('before-input-event', (e, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12' && !app.isPackaged) w.webContents.toggleDevTools();
+  });
+}
+
+function loadInto(w, query) {
+  if (process.env.BLACKJ_DEV) w.loadURL('http://localhost:5291/' + (query ? '?' + new URLSearchParams(query) : ''));
+  else w.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), query ? { query } : undefined);
+}
+
+// ------------------------------------------------------------------ pop-out windows
+
+const panels = new Map(); // 'editor' | 'dock' | 'side' -> BrowserWindow
+const PANEL_SIZE = { editor: { width: 980, height: 720 }, dock: { width: 900, height: 420 }, side: { width: 460, height: 760 } };
+const isMain = (e) => !!win && !win.isDestroyed() && e.sender === win.webContents;
+function panelOf(wc) {
+  for (const [p, w] of panels) if (!w.isDestroyed() && w.webContents === wc) return p;
+  return null;
+}
+
+function openPanel({ panel, x, y, title }) {
+  if (!PANEL_SIZE[panel] || !win || win.isDestroyed()) return false;
+  const open = panels.get(panel);
+  if (open && !open.isDestroyed()) {
+    if (!smokeDir) open.focus();
+    return true;
+  }
+  const stored = smokeDir ? null : geometry((settings.get().panelBounds || {})[panel]);
+  const saved = stored && onScreen(stored) ? stored : null;
+  const bounds = saved ? { ...saved } : { ...PANEL_SIZE[panel] };
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    // Dragged out of the main window: the new window's title bar sits under the pointer.
+    const area = screen.getDisplayNearestPoint({ x: Math.round(x), y: Math.round(y) }).workArea;
+    bounds.width = Math.min(bounds.width, area.width);
+    bounds.height = Math.min(bounds.height, area.height);
+    bounds.x = Math.round(Math.min(Math.max(area.x, x - 160), area.x + area.width - bounds.width));
+    bounds.y = Math.round(Math.min(Math.max(area.y, y - 20), area.y + area.height - bounds.height));
+  } else if (!saved) {
+    const m = win.getBounds();
+    bounds.x = Math.round(m.x + (m.width - bounds.width) / 2 + 40);
+    bounds.y = Math.round(m.y + (m.height - bounds.height) / 2 + 40);
+  }
+  const w = new BrowserWindow({ ...windowOptions(), ...bounds, minWidth: 420, minHeight: 280, title: title || 'BlackJ' });
+  panels.set(panel, w);
+  guard(w);
+  w.once('ready-to-show', () => {
+    if (!smokeDir) return w.show();
+    // Smoke test: painted like the main window, off-screen and without focus.
+    w.setPosition(-5200, 40);
+    w.showInactive();
+  });
+  for (const ev of ['resize', 'move']) w.on(ev, () => rememberPanelBounds(panel, w));
+  w.webContents.on('render-process-gone', () => {
+    if (!w.isDestroyed()) w.close();
+  });
+  // Closing the window (its own X, or the main window asking) docks the panel back.
+  w.on('closed', () => {
+    if (panels.get(panel) === w) panels.delete(panel);
+    send('panel:message', { from: panel, type: 'closed' });
+  });
+  loadInto(w, { panel });
+  return true;
+}
+
+const panelTimers = {};
+function rememberPanelBounds(panel, w) {
+  clearTimeout(panelTimers[panel]);
+  panelTimers[panel] = setTimeout(() => {
+    if (smokeDir || w.isDestroyed() || w.isMinimized() || w.isMaximized()) return;
+    settings.set({ panelBounds: { ...(settings.get().panelBounds || {}), [panel]: w.getNormalBounds() } });
+  }, 400);
+}
+
+function closePanels() {
+  for (const w of panels.values()) if (!w.isDestroyed()) w.close();
 }
 
 let boundsTimer = null;
@@ -654,40 +892,23 @@ function pathArgs(argv) {
 function createWindow() {
   const bounds = savedBounds();
   win = new BrowserWindow({
+    ...windowOptions(),
     width: bounds ? bounds.width : 1440,
     height: bounds ? bounds.height : 900,
     ...(bounds ? { x: bounds.x, y: bounds.y } : {}),
     minWidth: 1024,
     minHeight: 640,
-    show: false,
-    backgroundColor: settings.get().theme === 'light' ? '#ebebed' : '#0a0a0b',
-    title: 'BlackJ',
-    // Windows draws the taskbar button from the .ico, which has every size on its own grid.
-    icon: path.join(resDir, process.platform === 'win32' && fs.existsSync(path.join(resDir, 'icon.ico')) ? 'icon.ico' : 'icon.png'),
-    autoHideMenuBar: true,
-    titleBarStyle: 'hidden',
-    titleBarOverlay: settings.get().theme === 'light'
-      ? { color: '#ebebed', symbolColor: '#4d4d55', height: 44 }
-      : { color: '#0a0a0b', symbolColor: '#adadb3', height: 44 },
-    skipTaskbar: !!smokeDir,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      spellcheck: false,
-      backgroundThrottling: !smokeDir,
-    },
   });
   Menu.setApplicationMenu(null);
-  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.webContents.on('will-navigate', (e, url) => {
-    if (!url.startsWith('http://localhost:5291') && !url.startsWith('file://')) e.preventDefault();
-  });
-  win.webContents.on('before-input-event', (e, input) => {
-    if (input.type === 'keyDown' && input.key === 'F12' && !app.isPackaged) win.webContents.toggleDevTools();
-  });
+  guard(win);
   for (const ev of ['resize', 'move', 'maximize', 'unmaximize']) win.on(ev, rememberBounds);
+  // A reloaded window starts with an empty chat: the tutor's side starts over too, and pop-outs
+  // (whose owner is gone) close.
+  win.webContents.on('did-start-loading', () => {
+    settleTools('BlackJ was reloaded.');
+    if (tutor) tutor.reset();
+    closePanels();
+  });
   win.webContents.once('did-finish-load', () => {
     const dirs = pathArgs(process.argv);
     if (dirs[0] && !smokeDir) send('app:openPath', dirs[0]);
@@ -701,9 +922,11 @@ function createWindow() {
     win.setPosition(-3200, 40);
     win.showInactive();
   });
-  if (process.env.BLACKJ_DEV) win.loadURL('http://localhost:5291');
-  else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
-  win.on('closed', () => { win = null; });
+  loadInto(win, null);
+  win.on('closed', () => {
+    win = null;
+    closePanels();
+  });
 }
 
 app.on('second-instance', (_e, argv) => {
@@ -721,7 +944,14 @@ if (process.platform === 'win32') app.setAppUserModelId('app.blackj.ide');
 
 app.whenReady().then(() => {
   settings = new Settings(app.getPath('userData'));
-  tutor = new Tutor({ dir: app.getPath('userData'), safeStorage, emit: (ev) => send('ai:event', ev) });
+  tutor = new Tutor({
+    dir: app.getPath('userData'),
+    safeStorage,
+    emit: (ev) => send('ai:event', ev),
+    runTool: runAgentTool,
+    // The smoke run talks to a scripted fake of the API; no request leaves the machine.
+    clientOptions: smokeDir ? { fetch: require('./smoke-ai.cjs').smokeFetch } : {},
+  });
   registerIpc();
   createWindow();
 });

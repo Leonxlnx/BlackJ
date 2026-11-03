@@ -12,7 +12,7 @@ const defaults = { int: '0', double: '0.0', boolean: 'false', char: "'\\u0000'",
 export function createMock() {
   const listeners = { out: new Set(), state: new Set(), ai: new Set() };
   const emit = (k, v) => listeners[k].forEach((f) => f(v));
-  let settings = { lang: 'de', theme: 'dark', fontSize: 14, hoverHelp: true, autosave: true, diagramDetails: true, jdkPath: null, model: 'claude-opus-5-5', tutorMode: 'hints', sendContext: true, showCosts: true, rememberKey: true, recent: [{ dir: 'C:\\Users\\Schueler\\Documents\\BlackJ\\Tiere', name: 'Tiere', opened: new Date().toISOString() }] };
+  let settings = { lang: 'de', theme: 'dark', fontSize: 14, hoverHelp: true, autosave: true, diagramDetails: true, jdkPath: null, model: 'claude-opus-5-5', tutorMode: 'hints', sendContext: true, showCosts: false, rememberKey: true, recent: [{ dir: 'C:\\Users\\Schueler\\Documents\\BlackJ\\Tiere', name: 'Tiere', opened: new Date().toISOString() }] };
   let files = {};
   let objects = {};
   let hasKey = false;
@@ -145,6 +145,10 @@ export function createMock() {
         return Promise.resolve(true);
       },
       stop: () => Promise.resolve(),
+      continue: () => Promise.resolve(true),
+      toolResult: () => Promise.resolve(true),
+      editStop: () => Promise.resolve(),
+      onTool: () => () => {},
       onEvent: (f) => { listeners.ai.add(f); return () => listeners.ai.delete(f); },
     },
     openExternal: () => Promise.resolve(),

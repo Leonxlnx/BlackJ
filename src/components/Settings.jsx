@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore, setState, toast } from '../store.js';
 import { useT } from '../i18n.js';
 import * as A from '../actions.js';
@@ -9,9 +9,9 @@ function Switch({ checked, onChange, label }) {
   return <button className="switch" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} />;
 }
 
-function Row({ title, desc, children, stack }) {
+function Row({ title, desc, children, stack, tour }) {
   return (
-    <div className={'set-row' + (stack ? ' stack' : '')}>
+    <div className={'set-row' + (stack ? ' stack' : '')} data-tour={tour ? 'settings:' + tour : undefined}>
       <div>
         <div className="title">{title}</div>
         {desc && <div className="desc">{desc}</div>}
@@ -41,6 +41,15 @@ export default function Settings() {
   const [replacing, setReplacing] = useState(false);
   const set = (patch) => A.updateSettings(patch);
   const tutor = info.tutor;
+  const focus = useStore((st) => st.settingsFocus);
+
+  // "Kein Java" in the title bar leads here: show that row once.
+  useEffect(() => {
+    if (!focus) return;
+    const el = document.querySelector(`[data-tour="settings:${focus}"]`);
+    if (el) el.scrollIntoView({ block: 'center' });
+    setState({ settingsFocus: null });
+  }, [focus]);
 
   const chooseJdk = async () => {
     const r = await api.chooseJdk();
@@ -62,20 +71,20 @@ export default function Settings() {
         </div>
 
         <Section title={t('settings.look')}>
-          <Row title={t('settings.lang')}>
+          <Row title={t('settings.lang')} tour="lang">
             <Select value={s.lang} onChange={(v) => set({ lang: v })} aria-label={t('settings.lang')}>
               <option value="de">Deutsch</option>
               <option value="en">English</option>
             </Select>
           </Row>
-          <Row title={t('settings.theme')}>
+          <Row title={t('settings.theme')} tour="theme">
             <div className="seg">
               {['dark', 'light'].map((v) => (
                 <button key={v} aria-pressed={s.theme === v} onClick={() => set({ theme: v })}>{t('settings.theme.' + v)}</button>
               ))}
             </div>
           </Row>
-          <Row title={t('settings.fontSize')}>
+          <Row title={t('settings.fontSize')} tour="fontSize">
             <div className="seg">
               {[12, 13, 14, 16, 18].map((v) => (
                 <button key={v} aria-pressed={s.fontSize === v} onClick={() => set({ fontSize: v })}>{v}</button>
@@ -101,14 +110,14 @@ export default function Settings() {
             <Switch checked={!!s.clearConsoleOnCall} onChange={(v) => set({ clearConsoleOnCall: v })} label={t('settings.clearConsole')} />
           </Row>
           {!s.aiOff && (
-            <Row title={t('settings.aiInline')} desc={t('settings.aiInlineText')}>
+            <Row title={t('settings.aiInline')} desc={t('settings.aiInlineText')} tour="aiInline">
               <Switch checked={s.aiInline} onChange={(v) => set({ aiInline: v })} label={t('settings.aiInline')} />
             </Row>
           )}
         </Section>
 
         <Section title={t('settings.java')}>
-          <Row title={t('settings.javaCurrent')} desc={info.jdk ? `Java ${info.jdk.version} · ${info.jdk.source}` : t('home.javaMissing')}>
+          <Row tour="java" title={t('settings.javaCurrent')} desc={info.jdk ? `Java ${info.jdk.version} · ${info.jdk.source}` : t('home.javaMissing')}>
             <div className="action-row">
               {s.jdkPath && <button className="btn btn-sm btn-quiet" onClick={autoJdk}>{t('settings.javaAuto')}</button>}
               <button className="btn btn-sm" onClick={chooseJdk}>
@@ -167,7 +176,7 @@ export default function Settings() {
                   <Switch checked={s.rememberKey} onChange={(v) => set({ rememberKey: v })} label={t('tutor.keyRemember')} />
                 </Row>
               )}
-              <Row title={t('settings.model')} desc={(() => { const m = tutor.models.find((x) => x.id === s.model); return m ? t('settings.modelPrice', { input: m.input, output: m.output }) : ''; })()}>
+              <Row tour="model" title={t('settings.model')} desc={(() => { const m = tutor.models.find((x) => x.id === s.model); return m ? t('settings.modelPrice', { input: m.input, output: m.output }) : ''; })()}>
                 <Select value={s.model} onChange={(v) => set({ model: v })} aria-label={t('settings.model')}>
                   {tutor.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
                 </Select>
@@ -178,6 +187,9 @@ export default function Settings() {
                     <button key={v} aria-pressed={s.tutorMode === v} onClick={() => set({ tutorMode: v })}>{t('tutor.mode.' + v)}</button>
                   ))}
                 </div>
+              </Row>
+              <Row title={t('settings.agentWrite')} desc={t('settings.agentWriteText')} tour="agentWrite">
+                <Switch checked={!!s.agentWrite} onChange={(v) => set({ agentWrite: v })} label={t('settings.agentWrite')} />
               </Row>
               <Row title={t('settings.sendContext')}>
                 <Switch checked={s.sendContext} onChange={(v) => set({ sendContext: v })} label={t('settings.sendContext')} />

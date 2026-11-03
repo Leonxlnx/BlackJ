@@ -4,6 +4,7 @@ import { useT, formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
 import { CONCEPTS } from '../lib/glossary.js';
 import Icon from './Icon.jsx';
+import { viewMenu } from './TitleBar.jsx';
 
 /** Scores how well `q` matches `text` as an in-order subsequence; 0 = no match. */
 function score(q, text) {
@@ -65,8 +66,10 @@ export default function CommandPalette() {
       cmd(t('zip.export'), () => A.exportZip(), '', 'save');
       cmd(t('ws.reset'), A.stopProgram, '', 'reset');
       if (!s.settings.aiOff) cmd(t('ai.write'), () => setState({ aiPrompt: { at: Date.now() } }), 'ctrl I', 'pencil');
+      if (!s.settings.aiOff) cmd(t('cmd.aiInline'), () => A.updateSettings({ aiInline: !s.settings.aiInline }), '', 'pencil');
       cmd(t('menu.readme'), A.openReadme, '', 'file');
       cmd(t('ws.reveal'), () => window.blackj.project.reveal(), '', 'folderOpen');
+      for (const it of viewMenu(t, s.layout.detached)) if (it.label && !it.disabled) cmd(it.label, it.onClick, '', it.icon);
     }
     cmd(t('nav.projects'), () => A.go('home'), '', 'folder');
     cmd(t('home.openButton'), A.openDialog, '', 'folderOpen');

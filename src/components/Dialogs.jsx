@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore, getState } from '../store.js';
 import { useT } from '../i18n.js';
-import * as A from '../actions.js';
+import A, { WIN } from '../panels.js';
 import { isAssignable, simpleName } from '../model.js';
 import monaco from '../lib/monaco.js';
 import { valueText } from './InspectorPanel.jsx';
@@ -117,8 +117,8 @@ function CallDialog({ dialog }) {
         <>
           {recording && <span className="rec-pill"><span className="rec-dot" />{t('record.short')}</span>}
           <span className="grow" />
-          <button className="btn btn-quiet" onClick={A.closeDialog}>{t('call.cancel')}</button>
-          <button className="btn btn-primary" onClick={submit} disabled={busy}>
+          <button className="btn btn-quiet" data-tour="dialog:cancel" onClick={A.closeDialog}>{t('call.cancel')}</button>
+          <button className="btn btn-primary" data-tour="dialog:confirm" onClick={submit} disabled={busy}>
             {kind === 'new' ? t('call.create') : t('call.run')}
           </button>
         </>
@@ -127,7 +127,7 @@ function CallDialog({ dialog }) {
       <form onSubmit={submit} style={{ display: 'contents' }}>
         {doc && doc.text && !restatesTitle(doc.text, sname, kind) && <p className="doc">{doc.text}</p>}
         {kind === 'new' && (
-          <label className="field">
+          <label className="field" data-tour="dialog:name">
             <span className="field-label">{t('call.objectName')}</span>
             <input className="input mono" value={name} onChange={(e) => setName(e.target.value)} spellCheck="false" />
           </label>
@@ -165,7 +165,7 @@ function CallDialog({ dialog }) {
           }
           const noMatch = p.category === 'object' && !objects.some((o) => fits(o, p.type));
           return (
-            <div className="field" key={i}>
+            <div className="field" key={i} data-tour={'dialog:arg:' + i}>
               <span className="field-label">
                 {/^arg\d+$/.test(p.name) ? simple(p.type) : p.name}
                 <span className="type">{p.type}</span>
@@ -210,7 +210,7 @@ function ResultDialog({ dialog }) {
           <span className="grow" />
           {isRef && <button className="btn btn-quiet" onClick={() => { A.showInspector(v.handle, label); A.closeDialog(); }}>{t('result.inspect')}</button>}
           {isRef && <button className="btn" onClick={() => A.storeOnBench(v.handle)}>{t('result.toBench')}</button>}
-          <button className="btn btn-primary" onClick={A.closeDialog}>{t('result.close')}</button>
+          <button className="btn btn-primary" data-tour="dialog:confirm" onClick={A.closeDialog}>{t('result.close')}</button>
         </>
       }
     >
@@ -227,6 +227,8 @@ function DiffDialog({ dialog }) {
   const theme = useStore((s) => s.settings.theme);
   const hostRef = useRef(null);
   const modRef = useRef(null);
+  // A change the tutor proposes: the buttons decide it; closing only closes the dialog.
+  const proposal = dialog.proposalId || null;
   useEffect(() => {
     const original = monaco.editor.createModel(dialog.original, 'java');
     const modified = monaco.editor.createModel(dialog.modified, 'java');
@@ -265,16 +267,25 @@ function DiffDialog({ dialog }) {
     <Dialog
       xwide
       title={t('diff.title')}
-      sub={`${simpleName(dialog.file.replace(/\.java$/, '').split('/').join('.'))}.java · „${dialog.instruction.slice(0, 80)}“`}
+      sub={`${simpleName(dialog.file.replace(/\.java$/, '').split('/').join('.'))}.java` + (dialog.instruction && !proposal ? ` · „${dialog.instruction.slice(0, 80)}“` : '')}
       onClose={A.closeDialog}
       footer={
         <>
           {dialog.explanation && <span className="diff-expl">{dialog.explanation}</span>}
           <span className="grow" />
-          <button className="btn btn-quiet" onClick={A.closeDialog}>{t('diff.reject')}</button>
-          <button className="btn btn-primary" onClick={() => A.applyDiff(dialog.file, modRef.current.getValue())}>
-            {t('diff.accept')}
-          </button>
+          {proposal ? (
+            <>
+              <button className="btn btn-quiet" data-tour="dialog:cancel" onClick={() => A.rejectProposal(proposal)}>{t('agent.diff.reject')}</button>
+              <button className="btn btn-primary" data-tour="dialog:confirm" onClick={() => A.acceptProposal(proposal, modRef.current.getValue())}>{t('agent.diff.accept')}</button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-quiet" data-tour="dialog:cancel" onClick={A.closeDialog}>{t('diff.reject')}</button>
+              <button className="btn btn-primary" data-tour="dialog:confirm" onClick={() => A.applyDiff(dialog.file, modRef.current.getValue())}>
+                {t('diff.accept')}
+              </button>
+            </>
+          )}
         </>
       }
     >
@@ -309,8 +320,8 @@ function NewClassDialog() {
       onClose={A.closeDialog}
       footer={
         <>
-          <button className="btn btn-quiet" onClick={A.closeDialog}>{t('common.cancel')}</button>
-          <button className="btn btn-primary" onClick={submit} disabled={!valid || !!exists}>
+          <button className="btn btn-quiet" data-tour="dialog:cancel" onClick={A.closeDialog}>{t('common.cancel')}</button>
+          <button className="btn btn-primary" data-tour="dialog:confirm" onClick={submit} disabled={!valid || !!exists}>
             {t('newClass.create')}
           </button>
         </>
@@ -319,7 +330,7 @@ function NewClassDialog() {
       <form onSubmit={submit} style={{ display: 'contents' }}>
         <label className="field">
           <span className="field-label">{t('newClass.name')}</span>
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} spellCheck="false" aria-invalid={!!trimmed && (!valid || !!exists)} aria-describedby="nc-hint" />
+          <input className="input" data-tour="dialog:name" value={name} onChange={(e) => setName(e.target.value)} spellCheck="false" aria-invalid={!!trimmed && (!valid || !!exists)} aria-describedby="nc-hint" />
           <span className="field-hint" id="nc-hint">
             {exists ? t('err.exists') : suggestion ? t('newClass.lowercase', { suggestion }) : trimmed && !valid ? t('err.invalidName') : t('newClass.nameHint')}
           </span>
@@ -361,15 +372,15 @@ function NewPackageDialog() {
       onClose={A.closeDialog}
       footer={
         <>
-          <button className="btn btn-quiet" onClick={A.closeDialog}>{t('common.cancel')}</button>
-          <button className="btn btn-primary" onClick={submit} disabled={!valid}>{t('newClass.create')}</button>
+          <button className="btn btn-quiet" data-tour="dialog:cancel" onClick={A.closeDialog}>{t('common.cancel')}</button>
+          <button className="btn btn-primary" data-tour="dialog:confirm" onClick={submit} disabled={!valid}>{t('newClass.create')}</button>
         </>
       }
     >
       <form onSubmit={submit} style={{ display: 'contents' }}>
         <label className="field">
           <span className="field-label">{t('newPackage.name')}</span>
-          <input className="input mono" value={name} onChange={(e) => setName(e.target.value)} spellCheck="false" />
+          <input className="input mono" data-tour="dialog:name" value={name} onChange={(e) => setName(e.target.value)} spellCheck="false" />
           <span className="field-hint">{t('newPackage.hint')}</span>
         </label>
         {error && <div className="field-error">{error}</div>}
@@ -391,8 +402,8 @@ function JarDialog() {
       onClose={A.closeDialog}
       footer={
         <>
-          <button className="btn btn-quiet" onClick={A.closeDialog}>{t('common.cancel')}</button>
-          <button className="btn btn-primary" onClick={() => A.exportJar(main || null, src)}>
+          <button className="btn btn-quiet" data-tour="dialog:cancel" onClick={A.closeDialog}>{t('common.cancel')}</button>
+          <button className="btn btn-primary" data-tour="dialog:confirm" onClick={() => A.exportJar(main || null, src)}>
             {t('jar.export')}
           </button>
         </>
@@ -533,8 +544,8 @@ function RecordDialog({ dialog }) {
       onClose={A.closeDialog}
       footer={
         <>
-          <button className="btn btn-quiet" onClick={A.closeDialog}>{t('common.cancel')}</button>
-          <button className="btn btn-primary" disabled={!valid} onClick={() => A.startRecording(dialog.cls, name.trim())}>
+          <button className="btn btn-quiet" data-tour="dialog:cancel" onClick={A.closeDialog}>{t('common.cancel')}</button>
+          <button className="btn btn-primary" data-tour="dialog:confirm" disabled={!valid} onClick={() => A.startRecording(dialog.cls, name.trim())}>
             <span className="rec-dot" />
             {t('record.start')}
           </button>
@@ -558,7 +569,7 @@ function DeleteDialog({ dialog }) {
       onClose={A.closeDialog}
       footer={
         <>
-          <button className="btn btn-quiet" onClick={A.closeDialog}>{t('common.cancel')}</button>
+          <button className="btn btn-quiet" data-tour="dialog:cancel" onClick={A.closeDialog}>{t('common.cancel')}</button>
           <button className="btn btn-danger" onClick={() => A.deleteClass(dialog.cls)}>
             {t('delete.confirm')}
           </button>
@@ -572,13 +583,15 @@ function DeleteDialog({ dialog }) {
 
 export default function Dialogs() {
   const dialog = useStore((s) => s.dialog);
+  // With pop-out windows open, a dialog shows in the window the student is working in.
+  const here = useStore((s) => (s.activeWin || 'main') === WIN);
   useEffect(() => {
-    if (dialog && dialog.type === 'inspect') {
+    if (here && dialog && dialog.type === 'inspect') {
       A.showInspector(dialog.ref, dialog.trail ? dialog.trail[0] : dialog.ref);
       A.closeDialog();
     }
-  }, [dialog]);
-  if (!dialog) return null;
+  }, [dialog, here]);
+  if (!dialog || !here) return null;
   if (dialog.type === 'call') return <CallDialog key={dialog.cls + dialog.method.key + (dialog.target || '')} dialog={dialog} />;
   if (dialog.type === 'result') return <ResultDialog dialog={dialog} />;
   if (dialog.type === 'diff') return <DiffDialog dialog={dialog} />;

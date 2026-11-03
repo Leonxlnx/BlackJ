@@ -1,9 +1,13 @@
 // Everything the interface can do, in one place. Components call these; these update the store.
-import { getState, setState, toast } from './store.js';
+import { getState, setState, subscribe, toast } from './store.js';
 import { api } from './api.js';
 import { translate } from './i18n.js';
 import { projectModel, layoutAll, autoLayout, fileOfClass, simpleName, packageOfClass } from './model.js';
 import { template } from './lib/templates.js';
+import * as Agent from './agent.js';
+import { prepare as prepareTarget, rectOf } from './lib/tour.js';
+import * as Layout from './lib/layout.js';
+import { startOwner } from './panels.js';
 
 const t = (k, p) => translate(getState().settings.lang, k, p);
 let nextId = 1;
@@ -13,13 +17,15 @@ const uid = () => nextId++;
 
 export async function init() {
   const info = await api.init();
-  setState({ info, settings: info.settings, chat: { turns: [], busy: false, mode: info.settings.tutorMode }, ready: true });
+  setState({ info, settings: info.settings, chat: { turns: [], busy: false, mode: info.settings.tutorMode, notes: [], hiddenChips: {} }, ready: true });
   applyLook(info.settings);
   api.bench.onOut(onBenchOut);
   api.bench.onState(onBenchState);
   api.ai.onEvent(onAiEvent);
+  Agent.init();
   if (api.debug) api.debug.onEvent(onDebugEvent);
   if (api.onProjectChanged) api.onProjectChanged(onProjectChanged);
+  startOwner();
   if (info.smoke) import('./smoke.js').then((m) => m.runSmoke());
 }
 
@@ -30,10 +36,15 @@ function applyLook(s) {
 }
 
 export async function updateSettings(patch) {
+  if (patch.aiOff && getState().chat.busy) stopTutor();
+  const before = getState().settings;
   const settings = await api.setSettings(patch);
   setState({ settings });
   applyLook(settings);
-  if ('tutorMode' in patch && !getState().chat.turns.length) setState((s) => ({ chat: { ...s.chat, mode: patch.tutorMode } }));
+  if ('tutorMode' in patch) {
+    if (!getState().chat.turns.length) setState((s) => ({ chat: { ...s.chat, mode: patch.tutorMode } }));
+    else if (patch.tutorMode !== before.tutorMode && patch.tutorMode !== getState().chat.mode) toast(t('tutor.modeChanged'));
+  }
   return settings;
 }
 
@@ -76,8 +87,12 @@ function loadProject(p) {
   // An exercise opens with its task (README) in front, the class to work on next to it.
   const tabs = firstTab ? [firstTab.name] : [];
   if (p.exercise && p.readme) tabs.unshift('#readme');
+  // The tutor never carries a turn (or its tools) over into another project.
+  const prev = getState().project;
+  if (getState().chat.busy && (!prev || prev.dir !== p.dir)) stopTutor();
+  endTour('closed');
   setState({
-    project: { dir: p.dir, name: p.name, readOnly: p.readOnly, fromBlueJ: p.fromBlueJ, libs: p.libs || [], exercise: p.exercise || null },
+    project: { dir: p.dir, name: p.name, readOnly: p.readOnly, fromBlueJ: p.fromBlueJ, libs: p.libs || [], exercise: p.exercise || null, startFiles: p.files.map((f) => f.name) },
     files,
     readme: p.readme ? { ...p.readme, saved: p.readme.content } : null,
     extraPackages: [],
@@ -103,6 +118,7 @@ function loadProject(p) {
     debug: { attached: false, paused: null },
     inspect: null,
     side: 'tutor',
+    layout: { tree: storedLayout(p.dir), detached: getState().layout.detached },
   });
   newChat();
   if (JSON.stringify(p.positions || {}) !== JSON.stringify(positions)) persistPositions();
@@ -197,6 +213,10 @@ export const openExercise = (id) => handleOpen(api.project.exercise(id));
 export const createProject = (name) => handleOpen(api.project.create(name));
 
 export function closeProject() {
+  if (getState().chat.busy) stopTutor();
+  for (const p of getState().layout.detached) dockBack(p);
+  endTour('closed');
+  newChat();
   api.bench.reset();
   setState({ project: null, files: {}, view: 'home', tabs: [], activeTab: null, bench: { state: 'off', objects: [], java: null } });
 }
@@ -237,6 +257,8 @@ export function openFile(name, line) {
     view: 'project',
     editorMode: 'source',
   }));
+  // The editor in its own window comes to the front (without taking the keyboard).
+  if (getState().layout.detached.includes('editor') && !getState().info.smoke) api.panel.show({ panel: 'editor' });
 }
 
 export function openClass(cls, line) {
@@ -309,13 +331,18 @@ export async function newClass(simple, kind) {
   if (pkg) content = `package ${pkg};\n\n` + content;
   const r = await api.project.createClass({ className: qualified, content });
   if (!r.ok) return errorText(r.error);
-  const f = r.result;
-  setState((st) => ({ files: { ...st.files, [f.name]: { ...f, pkg: f.pkg || '', saved: f.content } }, dialog: null }));
+  setState({ dialog: null });
+  addCreatedFile(r.result);
+  return null;
+}
+
+/** A class file that now exists on disk joins the project: files, diagram position, editor. */
+export function addCreatedFile(f) {
+  setState((st) => ({ files: { ...st.files, [f.name]: { ...f, pkg: f.pkg || '', saved: f.content } } }));
   const model = projectModel(getState().files);
-  setState((st) => ({ positions: autoLayout(model, st.positions, pkg) }));
+  setState((st) => ({ positions: autoLayout(model, st.positions, f.pkg || '') }));
   persistPositions();
   openFile(f.name);
-  return null;
 }
 
 function testTemplate(name, lang) {
@@ -431,7 +458,7 @@ export async function deleteClass(cls) {
   const r = await api.project.deleteClass({ name });
   if (!r.ok) {
     toast(errorText(r.error), 'bad');
-    return;
+    return false;
   }
   setState((s) => {
     const files = { ...s.files };
@@ -442,6 +469,7 @@ export async function deleteClass(cls) {
     return { files, positions, tabs, activeTab: s.activeTab === name ? tabs[0] || null : s.activeTab, dialog: null, bench: { ...s.bench, state: 'off', objects: [] } };
   });
   persistPositions();
+  return true;
 }
 
 export async function exportJar(mainClass, includeSource) {
@@ -465,14 +493,14 @@ export async function compile() {
   setState({ compile: { ...s.compile, state: 'compiling' }, menu: null });
   const r = await api.compile();
   if (!r.ok) {
-    setState((st) => ({ compile: { ...st.compile, state: 'failed' } }));
+    setState((st) => ({ compile: { ...st.compile, state: 'failed', failed: errorText(r.error), at: Date.now() } }));
     toast(errorText(r.error), 'bad');
     return;
   }
   const res = r.result;
   const snapshot = Object.fromEntries(Object.values(getState().files).map((f) => [f.name, f.saved]));
   setState((st) => ({
-    compile: { state: res.ok ? 'ok' : 'errors', problems: res.problems, snapshot, ms: res.ms, at: Date.now() },
+    compile: { state: res.ok ? 'ok' : 'errors', problems: res.problems, snapshot, ms: res.ms, at: Date.now(), failed: res.failed ? res.output : null },
     classInfo: {},
     exception: null,
     inspect: null,
@@ -491,7 +519,7 @@ export function anyStale() {
   return Object.keys(getState().files).some((n) => isStale(n));
 }
 
-async function ensureCompiled() {
+export async function ensureCompiled() {
   if (getState().compile.state !== 'ok' || anyStale()) {
     await compile();
     if (getState().compile.state !== 'ok') return false;
@@ -591,33 +619,36 @@ export function statementFor({ kind, cls, target, method, args, name }) {
   return call + ';';
 }
 
-export async function createObject(cls, ctor, args, name) {
+/** keepSide: the tutor created the object, so the side panel stays on the tutor. */
+export async function createObject(cls, ctor, args, name, { keepSide = false } = {}) {
   await breakpointsReady();
   const r = await api.bench.create({ className: cls, key: ctor.key, args, name: name || null });
   if (!r.ok) {
     if (r.error.kind === 'exception') {
       setException(r.error, `new ${simpleName(cls)}(…)`);
-      return { done: true };
+      return { done: true, exception: r.error };
     }
+    if (r.error.code === 'stopped') return { done: true, stopped: true };
     return { error: errorText(r.error) };
   }
   const stmt = statementFor({ kind: 'new', cls, method: ctor, args, name: r.result.name });
   if (getState().settings.clearConsoleOnCall) clearConsole();
   logCall(stmt);
   record(stmt);
-  setState((s) => ({ bench: { ...s.bench, objects: r.result.bench, lastNew: r.result.name }, dock: s.dock === 'pad' ? 'pad' : 'objects', exception: null, inspect: { ref: r.result.name, trail: [r.result.name] }, side: s.side === 'tutor' && !s.tutorPinned ? 'inspect' : s.side }));
+  setState((s) => ({ bench: { ...s.bench, objects: r.result.bench, lastNew: r.result.name }, dock: s.dock === 'pad' ? 'pad' : 'objects', exception: null, inspect: { ref: r.result.name, trail: [r.result.name] }, side: s.side === 'tutor' && !s.tutorPinned && !keepSide ? 'inspect' : s.side }));
   return { done: true, name: r.result.name };
 }
 
-export async function callMethod({ target, cls, method, args }) {
+/** quiet: no result dialog (the tutor called it and reports the value itself). */
+export async function callMethod({ target, cls, method, args, quiet = false }) {
   await breakpointsReady();
   const r = await api.bench.call({ target: method.static ? null : target, className: cls, key: method.key, args });
   if (!r.ok) {
     if (r.error.kind === 'exception') {
       setException(r.error, `${method.static ? simpleName(cls) : target}.${method.name}(…)`);
-      return { done: true };
+      return { done: true, exception: r.error };
     }
-    if (r.error.code === 'stopped') return { done: true };
+    if (r.error.code === 'stopped') return { done: true, stopped: true };
     return { error: errorText(r.error) };
   }
   const res = r.result;
@@ -627,23 +658,55 @@ export async function callMethod({ target, cls, method, args }) {
   logCall(res.void ? callText : `${callText}  →  ${shown}`);
   if (res.void) record(callText + ';');
   setState((s) => ({ bench: { ...s.bench, objects: res.bench }, exception: null, inspectTick: Date.now() }));
-  if (!res.void) setState({ dialog: { type: 'result', label: callText, result: res } });
-  return { done: true };
+  if (!res.void && !quiet) setState({ dialog: { type: 'result', label: callText, result: res } });
+  return { done: true, result: res };
 }
 
-export async function runMain(cls) {
-  if (!(await ensureCompiled())) return;
+/**
+ * Runs a class's main method. For the tutor: `input` lines are typed into the console each time the
+ * program waits (a wait with no line left stops it), and `timeoutMs` stops a program that runs on.
+ */
+export async function runMain(cls, { input = null, timeoutMs = 0 } = {}) {
+  if (!(await ensureCompiled())) return { compileFailed: true };
   setState({ dock: 'console', menu: null, palette: null });
   if (getState().settings.clearConsoleOnCall) clearConsole();
   logCall(`${simpleName(cls)}.main(new String[0])`);
   await breakpointsReady();
+  const out = { finished: false, timedOut: false, waitingForInput: false };
+  const lines = input ? [...input] : null;
+  let unsubscribe = null;
+  let timer = null;
+  if (lines) {
+    let was = getState().bench.state;
+    unsubscribe = subscribe(() => {
+      const now = getState().bench.state;
+      const before = was;
+      was = now;
+      if (now !== 'waiting' || before === 'waiting') return;
+      if (lines.length) sendInput(lines.shift());
+      else {
+        out.waitingForInput = true;
+        stopProgram();
+      }
+    });
+  }
+  if (timeoutMs) timer = setTimeout(() => { out.timedOut = true; stopProgram(); }, timeoutMs);
   const r = await api.bench.main({ className: cls });
+  clearTimeout(timer);
+  if (unsubscribe) unsubscribe();
   if (!r.ok) {
-    if (r.error.kind === 'exception') setException(r.error, `${simpleName(cls)}.main`);
-    else if (r.error.code !== 'stopped') toast(errorText(r.error), 'bad');
-    return;
+    if (r.error.kind === 'exception') {
+      setException(r.error, `${simpleName(cls)}.main`);
+      out.exception = r.error;
+    } else if (r.error.code !== 'stopped') {
+      toast(errorText(r.error), 'bad');
+      out.error = errorText(r.error);
+    }
+    return out;
   }
   setState((st) => ({ bench: { ...st.bench, objects: r.result.bench } }));
+  out.finished = true;
+  return out;
 }
 
 function waitFor(cond, ms) {
@@ -842,8 +905,11 @@ export async function debugExpand(objectId) {
 
 export function newChat() {
   const s = getState();
+  const tour = s.tour;
+  if (tour && tour.turnId && s.chat.turns.some((x) => x.id === tour.turnId)) endTour('closed');
+  Agent.closeProposals();
   api.ai.newChat({ lang: s.settings.lang, mode: s.chat.mode });
-  setState((st) => ({ chat: { ...st.chat, turns: [], busy: false } }));
+  setState((st) => ({ chat: { ...st.chat, turns: [], busy: false, notes: [], hiddenChips: {} } }));
 }
 
 export function setTutorMode(mode) {
@@ -851,19 +917,62 @@ export function setTutorMode(mode) {
   newChat();
 }
 
+const exceptionText = (e) => `${e.type}${e.message ? ': ' + e.message : ''}\n` + (e.frames || []).map((fr) => `  at ${fr.className}.${fr.method}(${fr.file || '?'}:${fr.line})`).join('\n');
+const errorsOf = (s) => (s.compile.state === 'errors' ? s.compile.problems.filter((p) => p.severity === 'error') : []);
+
+/**
+ * What the composer offers to send along with the next message, as chips the student can remove.
+ * Each chip has a `value` that says when a removed chip comes back (it changed).
+ */
+export function contextChips(s = getState()) {
+  if (!s.project) return [];
+  const chips = [];
+  const f = s.activeTab && s.activeTab !== '#readme' && s.files[s.activeTab];
+  if (f) chips.push({ key: 'file', value: f.name, label: t('chip.file', { file: simpleName(f.className) + '.java' }) });
+  const sel = s.editorSelection;
+  if (f && sel && sel.file === s.activeTab && sel.text.trim()) chips.push({ key: 'selection', value: `${sel.from}-${sel.to}`, label: t('chip.selection', { from: sel.from, to: sel.to }) });
+  const errors = errorsOf(s);
+  if (errors.length) chips.push({ key: 'problems', value: String(s.compile.at), label: errors.length === 1 ? t('chip.error1') : t('chip.errors', { n: errors.length }) });
+  if (s.exception) chips.push({ key: 'exception', value: s.exception.label || s.exception.simpleType, label: t('chip.exception', { type: s.exception.simpleType }) });
+  const ex = s.project.exercise && (s.info.exercises || []).find((e) => e.id === s.project.exercise);
+  if (ex) chips.push({ key: 'exercise', value: ex.id, label: t('chip.exercise', { title: ex.title }) });
+  return chips.map((c) => ({ ...c, hidden: s.chat.hiddenChips[c.key] === c.value }));
+}
+
+export function hideChip(key, value) {
+  setState((s) => ({ chat: { ...s.chat, hiddenChips: { ...s.chat.hiddenChips, [key]: value } } }));
+}
+
 export function buildContext() {
   const s = getState();
-  if (!s.settings.sendContext) return null;
-  const f = s.activeTab && s.files[s.activeTab];
-  const ctx = { classes: Object.values(s.files).map((x) => x.className) };
-  if (f) Object.assign(ctx, { file: f.name, content: f.content });
-  if (s.editorSelection && s.editorSelection.file === s.activeTab && s.editorSelection.text.trim()) ctx.selection = s.editorSelection;
-  if (s.compile.state === 'errors') ctx.problems = s.compile.problems;
-  if (s.exception) {
-    const e = s.exception;
-    ctx.exception = `${e.type}${e.message ? ': ' + e.message : ''}\n` + (e.frames || []).map((fr) => `  at ${fr.className}.${fr.method}(${fr.file || '?'}:${fr.line})`).join('\n');
+  const shown = Object.fromEntries(contextChips(s).filter((c) => !c.hidden).map((c) => [c.key, true]));
+  const ctx = {};
+  if (s.settings.sendContext) {
+    ctx.classes = Object.values(s.files).map((x) => x.className);
+    const f = shown.file && s.files[s.activeTab];
+    if (f) Object.assign(ctx, { file: f.name, content: f.content, cursor: s.cursor ? s.cursor.line : 1 });
+    if (shown.selection) ctx.selection = s.editorSelection;
+    if (shown.problems) ctx.problems = s.compile.problems;
+    if (shown.exception) ctx.exception = exceptionText(s.exception);
   }
-  return ctx;
+  // Notes, the exercise and a running tutorial name no code, so they always go along.
+  if (s.chat.notes.length) ctx.notes = s.chat.notes;
+  const ex = shown.exercise && (s.info.exercises || []).find((e) => e.id === s.project.exercise);
+  if (ex) ctx.exercise = ex.title;
+  if (s.tour && s.tour.mode === 'tour') ctx.tour = { title: s.tour.title || '', step: s.tour.index + 1, of: s.tour.steps.length };
+  return Object.keys(ctx).length ? ctx : null;
+}
+
+/** What the main process needs to enforce the rules of the current mode. */
+function agentInfo(s) {
+  const model = s.project ? projectModel(s.files) : null;
+  return {
+    mode: s.chat.mode,
+    exercise: !!(s.project && s.project.exercise),
+    testFiles: model ? model.list.filter((c) => c.isTest).map((c) => c.file) : [],
+    readCode: !!s.settings.sendContext,
+    readOnly: !!(s.project && s.project.readOnly),
+  };
 }
 
 /** AI features are on: a key is set and they are not switched off (e.g. for a class test). */
@@ -871,37 +980,122 @@ export const aiOn = (s) => !!s.info.tutor.hasKey && !s.settings.aiOff;
 
 export async function askTutor(text) {
   const s = getState();
-  if (!text.trim() || s.chat.busy || s.settings.aiOff) return;
+  if (!text.trim() || s.settings.aiOff) return;
+  if (s.chat.busy) {
+    // The tutor is still answering: the question waits in the composer instead of vanishing.
+    setState({ tutorOpen: true, side: 'tutor', tutorDraft: { text, at: Date.now() } });
+    return;
+  }
   setState({ tutorOpen: true, side: 'tutor' });
   const turnId = 't' + Date.now();
   const context = buildContext();
-  const ctxLabel = context && context.file ? context.file : null;
+  const ctxLabel = context && context.file ? simpleName(s.files[context.file].className) + '.java' : null;
+  Agent.startTurn(s.project ? s.project.dir : null);
   setState((st) => ({
-    chat: { ...st.chat, busy: true, turns: [...st.chat.turns, { id: turnId + 'u', role: 'user', text, ctx: ctxLabel }, { id: turnId, role: 'assistant', text: '', status: 'waiting' }] },
+    chat: { ...st.chat, busy: true, notes: [], turns: [...st.chat.turns, { id: turnId + 'u', role: 'user', text, ctx: ctxLabel }, { id: turnId, role: 'assistant', parts: [], status: 'waiting' }] },
   }));
-  await api.ai.send({ text, context, model: s.settings.model, lang: s.settings.lang, mode: s.chat.mode, turnId });
+  await api.ai.send({ text, context, model: s.settings.model, lang: s.settings.lang, mode: s.chat.mode, turnId, agent: agentInfo(s) });
+}
+
+/** Resumes the last turn after it failed between tool rounds (files may already have changed). */
+export async function continueLast() {
+  const s = getState();
+  const turn = s.chat.turns[s.chat.turns.length - 1];
+  if (!turn || turn.role !== 'assistant' || s.chat.busy) return;
+  Agent.startTurn(s.project ? s.project.dir : null);
+  setState((st) => ({ chat: { ...st.chat, busy: true, turns: st.chat.turns.map((x) => (x.id === turn.id ? { ...x, status: 'working', error: null, partial: false } : x)) } }));
+  // Step numbers go on after the turn's last one: `discard { step }` must never hit an earlier part.
+  const stepBase = Math.max(0, turn.steps || 0, ...(turn.parts || []).map((p) => p.step || 0));
+  await api.ai.continue({ turnId: turn.id, model: s.settings.model, agent: agentInfo(s), stepBase });
+}
+
+const sameTurn = (fn) => (s, ev) => ({ chat: { ...s.chat, turns: s.chat.turns.map((turn) => (turn.id === ev.turnId ? fn(turn, ev) : turn)) } });
+const endParts = (parts) => parts.map((p) => (p.type === 'tool' && (p.status === 'streaming' || p.status === 'running') ? { ...p, status: 'cancelled' } : p));
+
+/** One event of the agent loop applied to its turn. */
+function applyAiEvent(turn, ev) {
+  const parts = turn.parts || [];
+  const last = parts[parts.length - 1];
+  switch (ev.type) {
+    case 'step':
+      return ev.n > 1 ? { ...turn, status: 'working' } : turn;
+    case 'thinking':
+      return parts.length ? turn : { ...turn, status: 'thinking' };
+    case 'writing':
+      if (last && last.type === 'text' && last.step === ev.step) return { ...turn, status: 'working' };
+      return { ...turn, status: 'working', parts: [...parts, { type: 'text', text: '', step: ev.step }] };
+    case 'delta':
+      if (last && last.type === 'text') return { ...turn, status: 'working', parts: [...parts.slice(0, -1), { ...last, text: last.text + ev.text }] };
+      return { ...turn, status: 'working', parts: [...parts, { type: 'text', text: ev.text, step: ev.step }] };
+    case 'toolStart':
+      return { ...turn, status: 'working', parts: [...parts, { type: 'tool', callId: ev.callId, name: ev.name, input: null, status: 'streaming', step: ev.step }] };
+    case 'discard':
+      return { ...turn, parts: parts.filter((p) => p.step !== ev.step) };
+    case 'done':
+      return {
+        ...turn, parts: endParts(parts), status: ev.stopReason === 'refusal' ? 'refusal' : 'done', usage: ev.usage, cost: ev.cost, model: ev.model,
+        steps: ev.steps, limit: ev.limit, long: ev.long, full: ev.full,
+      };
+    case 'aborted':
+      return { ...turn, parts: endParts(parts), status: 'aborted', partial: ev.partial };
+    case 'error':
+      return { ...turn, parts: endParts(parts), status: 'error', error: ev, partial: ev.partial };
+    default:
+      return turn;
+  }
+}
+
+// Text deltas are applied once per frame, so a long answer does not re-render for every token.
+let pendingDeltas = [];
+let deltaFrame = 0;
+function flushDeltas() {
+  cancelAnimationFrame(deltaFrame);
+  deltaFrame = 0;
+  if (!pendingDeltas.length) return;
+  const list = pendingDeltas;
+  pendingDeltas = [];
+  setState((s) => {
+    let st = s;
+    for (const ev of list) st = { ...st, ...sameTurn(applyAiEvent)(st, ev) };
+    return { chat: st.chat };
+  });
 }
 
 function onAiEvent(ev) {
+  if (ev.type === 'delta') {
+    pendingDeltas.push(ev);
+    if (!deltaFrame) deltaFrame = requestAnimationFrame(flushDeltas);
+    return;
+  }
+  flushDeltas();
+  if (ev.type === 'toolCancel') {
+    Agent.onToolCancel(ev);
+    return;
+  }
   setState((s) => {
-    const turns = s.chat.turns.map((turn) => {
-      if (turn.id !== ev.turnId) return turn;
-      if (ev.type === 'thinking') return { ...turn, status: 'thinking' };
-      if (ev.type === 'writing') return { ...turn, status: 'writing' };
-      if (ev.type === 'delta') return { ...turn, status: 'writing', text: turn.text + ev.text };
-      if (ev.type === 'done') return { ...turn, status: ev.stopReason === 'refusal' ? 'refusal' : 'done', usage: ev.usage, cost: ev.cost, model: ev.model };
-      if (ev.type === 'aborted') return { ...turn, status: 'aborted' };
-      if (ev.type === 'error') return { ...turn, status: 'error', error: ev };
-      return turn;
-    });
-    const busy = !['done', 'aborted', 'error'].includes(ev.type) && s.chat.busy;
-    return { chat: { ...s.chat, turns, busy } };
+    const next = sameTurn(applyAiEvent)(s, ev);
+    const own = s.chat.turns.length && s.chat.turns[s.chat.turns.length - 1].id === ev.turnId;
+    const busy = own && ['done', 'aborted', 'error'].includes(ev.type) ? false : s.chat.busy;
+    return { chat: { ...next.chat, busy } };
   });
+  if (['done', 'aborted', 'error'].includes(ev.type)) Agent.endTurn(ev);
 }
 
 export function stopTutor() {
   api.ai.stop();
 }
+
+/**
+ * Enter while the tutor only waits for a decision on its change: the turn stops (the card keeps
+ * its buttons) and the new message goes out once the stop has arrived.
+ */
+export async function sendAfterStop(text) {
+  stopTutor();
+  await waitFor(() => !getState().chat.busy, 5000);
+  if (!getState().chat.busy) await askTutor(text);
+}
+
+export { acceptProposal, rejectProposal, undoChange } from './agent.js';
 
 export async function retryLast() {
   const turns = getState().chat.turns;
@@ -909,6 +1103,76 @@ export async function retryLast() {
   if (!lastUser) return;
   setState((s) => ({ chat: { ...s.chat, turns: s.chat.turns.slice(0, -2) } }));
   await askTutor(lastUser.text);
+}
+
+// ------------------------------------------------------------------ tutorials (the ring that shows where to click)
+
+let pointTimer = null;
+
+export function startTour({ title, steps, callId, turnId }) {
+  if (getState().tour) endTour('replaced');
+  setState({ tour: { id: uid(), mode: 'tour', title: title || '', steps, index: 0, callId, turnId, startedAt: Date.now(), stepAt: Date.now() } });
+  enterStep();
+}
+
+/** One ring with a note and no steps. Resolves false when the target does not show up in 1.5 s. */
+export async function pointAt({ target, text, callId, turnId }) {
+  if (getState().tour) endTour('replaced');
+  const id = uid();
+  setState({ tour: { id, mode: 'point', title: '', steps: [{ target, text, action: 'next' }], index: 0, callId, turnId, startedAt: Date.now(), stepAt: Date.now() } });
+  prepareTarget(target);
+  const start = Date.now();
+  while (!rectOf(target)) {
+    if (Date.now() - start > 1500 || !getState().tour || getState().tour.id !== id) {
+      if (getState().tour && getState().tour.id === id) endTour('closed');
+      return false;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  clearTimeout(pointTimer);
+  pointTimer = setTimeout(() => {
+    if (getState().tour && getState().tour.id === id) endTour('done');
+  }, 8000);
+  return true;
+}
+
+function enterStep() {
+  const tour = getState().tour;
+  if (!tour) return;
+  setState({ tour: { ...tour, stepAt: Date.now() } });
+  prepareTarget(tour.steps[tour.index].target);
+}
+
+export function tourNext() {
+  const tour = getState().tour;
+  if (!tour) return;
+  if (tour.index >= tour.steps.length - 1) {
+    endTour('done');
+    return;
+  }
+  setState({ tour: { ...tour, index: tour.index + 1 } });
+  enterStep();
+}
+
+export function tourBack() {
+  const tour = getState().tour;
+  if (!tour || tour.index === 0) return;
+  setState({ tour: { ...tour, index: tour.index - 1 } });
+  enterStep();
+}
+
+/** reason: 'done' | 'closed' | 'escape' | 'replaced'. */
+export function endTour(reason) {
+  const tour = getState().tour;
+  if (!tour) return;
+  clearTimeout(pointTimer);
+  const finished = reason === 'done';
+  setState({ tour: null, lastTour: { title: tour.title, step: tour.index + 1, of: tour.steps.length, finished } });
+  if (tour.callId && tour.mode === 'tour') {
+    // Closed on its last step, the tutorial was seen through: that is not a failure.
+    const seen = finished || tour.index === tour.steps.length - 1;
+    Agent.setToolSummary(tour.turnId, tour.callId, seen ? t('agent.sum.tourDone') : t('agent.sum.tourStopped', { i: tour.index + 1, n: tour.steps.length }));
+  }
 }
 
 export async function setApiKey(key, remember) {
@@ -941,7 +1205,7 @@ export async function aiEdit({ instruction, scope, selection }) {
   const r = await api.ai.edit({ instruction, file: f.name, content: f.content, selection, model: s.settings.model, lang: s.settings.lang, scope });
   setState({ aiBusy: null });
   if (!r.ok) {
-    toast(t('tutor.err.' + (r.error.code || 'unknown'), { message: r.error.message || '' }), 'bad');
+    if (r.error.code !== 'aborted') toast(t('tutor.err.' + (r.error.code || 'unknown'), { message: r.error.message || '' }), 'bad');
     return;
   }
   const lines = f.content.split('\n');
@@ -954,6 +1218,12 @@ export async function aiEdit({ instruction, scope, selection }) {
   }
   if (f.content.endsWith('\n') && !modified.endsWith('\n')) modified += '\n';
   setState({ dialog: { type: 'diff', file: name, original: f.content, modified, explanation: r.result.explanation, instruction } });
+}
+
+/** Stops a running Ctrl+I request; the editor stays as it was. */
+export function stopEdit() {
+  if (api.ai.editStop) api.ai.editStop();
+  setState({ aiBusy: null });
 }
 
 export function aiFix(problem) {
@@ -1009,6 +1279,70 @@ export function toggleTutor() {
 
 export function setSide(side) {
   setState({ side, tutorOpen: true });
+}
+
+// ------------------------------------------------------------------ workspace layout and pop-outs
+// The arrangement of the panels is remembered per project (in this PC's browser storage).
+
+const layoutKey = (dir) => 'blackj.layout:' + String(dir).toLowerCase();
+
+function storedLayout(dir) {
+  try {
+    const tree = JSON.parse(localStorage.getItem(layoutKey(dir)) || 'null');
+    if (tree && Layout.isValid(tree)) return tree;
+  } catch { /* nothing stored, or storage blocked */ }
+  return Layout.defaultLayout();
+}
+
+function setLayoutTree(tree) {
+  setState((s) => ({ layout: { ...s.layout, tree } }));
+  const s = getState();
+  if (!s.project) return;
+  try {
+    localStorage.setItem(layoutKey(s.project.dir), JSON.stringify(tree));
+  } catch { /* private mode */ }
+}
+
+export function setSplitSizes(id, sizes) {
+  setLayoutTree(Layout.setSizes(getState().layout.tree, id, sizes));
+}
+
+export function resetSplit(id) {
+  setLayoutTree(Layout.resetSizes(getState().layout.tree, id));
+}
+
+/** A panel dragged by its head onto a side of another panel (or of the whole workspace). */
+export function movePanelTo(panel, target, zone) {
+  if (!Layout.PANELS.includes(panel) || panel === target) return;
+  if (panel === 'side' || target === 'side') setState({ tutorOpen: true });
+  setLayoutTree(Layout.movePanel(getState().layout.tree, panel, target, zone));
+}
+
+export function resetLayout() {
+  for (const p of getState().layout.detached) dockBack(p);
+  setLayoutTree(Layout.defaultLayout());
+}
+
+/** Moves a panel into a window of its own; `at` is the screen point where it was dropped. */
+export function popOut(panel, at) {
+  const s = getState();
+  if (!Layout.POPPABLE.includes(panel) || !s.project || !api.panel) return;
+  setState((st) => ({ layout: { ...st.layout, detached: [...new Set([...st.layout.detached, panel])] }, ...(panel === 'side' ? { tutorOpen: true } : {}), ...(panel === 'dock' ? { dockCollapsed: false } : {}) }));
+  api.panel.open({ panel, x: at ? at.x : undefined, y: at ? at.y : undefined, title: `${panelTitle(panel)} – ${s.project.name}` });
+}
+
+/** Closes a pop-out window; its panel goes back to its place in the main window. */
+export function dockBack(panel) {
+  if (api.panel) api.panel.close({ panel });
+  panelClosed(panel);
+}
+
+export function panelClosed(panel) {
+  setState((s) => ({ layout: { ...s.layout, detached: s.layout.detached.filter((p) => p !== panel) }, activeWin: s.activeWin === panel ? 'main' : s.activeWin }));
+}
+
+export function panelTitle(panel) {
+  return panel === 'diagram' ? t('diagram.title') : t('panel.' + panel);
 }
 
 export { simpleName, packageOfClass, fileOfClass };

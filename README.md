@@ -29,6 +29,14 @@
 <td><img src="docs/screenshots/exercises.png" alt="Übungen mit Tests"><br><sub>Übungen mit Tests: alle grün heißt geschafft</sub></td>
 <td><img src="docs/screenshots/parameter-hints.png" alt="Parameter-Hinweise"><br><sub>Parameter-Hinweise mit Erklärung beim Tippen</sub></td>
 </tr>
+<tr>
+<td><img src="docs/screenshots/agent.png" alt="KI-Tutor schlägt eine Änderung vor"><br><sub>Der Tutor liest deinen Code und schlägt Änderungen vor</sub></td>
+<td><img src="docs/screenshots/tutorial.png" alt="Tutorial mit Ring um Kompilieren"><br><sub>Tutorials zeigen dir, wo du klicken musst</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/popout.png" alt="Editor in eigenem Fenster"><br><sub>Editor, Leiste und Seitenpanel als eigenes Fenster</sub></td>
+<td></td>
+</tr>
 </table>
 
 ---
@@ -57,12 +65,15 @@
 - Klassendiagramm als PNG speichern, zum Beispiel für den Projektbericht
 - Befehlspalette (`Strg+P`) für Klassen, Methoden, Befehle und Lernbegriffe, Tastenkürzel-Übersicht mit `F1`
 - Passt sich kleinen Schulbildschirmen an (1280×720), Projekte per Drag & Drop öffnen, Änderungen von außen werden übernommen
+- Panels frei anordnen: Trennlinien ziehen, Panels an ihrem Kopf verschieben, Editor, untere Leiste oder Seitenpanel in ein eigenes Fenster holen
 - Lernen-Seite mit den wichtigsten OOP-Begriffen, Beispielen und Suche
 - **6 Übungen mit Tests**: Konstruktor, Schleifen, Texte, Arrays, ArrayList, Vererbung. Aufgabe lesen, Code schreiben, Tests laufen lassen – alle grün heißt geschafft
 - Dunkles und helles Design, Deutsch und Englisch
 
 **KI (optional, mit eigenem API-Schlüssel)**
 - KI-Tutor im Modus *Tipps* (hilft dir, selbst auf die Lösung zu kommen) oder *Erklären*
+- Der Tutor arbeitet wie ein Agent: Er sieht dein Projekt, liest Dateien, kompiliert, führt Tests aus und schlägt Änderungen als Vergleich vor (oder schreibt sie selbst, wenn du das erlaubst)
+- Tutorials direkt in BlackJ: Der Tutor zieht einen Ring um den Knopf, den du drücken musst („Hier klicken“)
 - KI-Vorschläge beim Tippen (grauer Text, `Tab` übernimmt)
 - `Strg+I`: „Mit KI schreiben“ – Änderung erscheint als Vergleich, du entscheidest
 - „Mit KI beheben“ bei Compilerfehlern

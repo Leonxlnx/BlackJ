@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore, getState, setState } from '../store.js';
 import { useT, translate, formatKeys } from '../i18n.js';
-import * as A from '../actions.js';
+import A, { PANEL } from '../panels.js';
 import { api } from '../api.js';
 import monaco, { defineThemes } from '../lib/monaco.js';
 import { KEYWORDS } from '../lib/keywords.js';
@@ -11,8 +11,12 @@ import { explainException } from '../lib/exceptions.js';
 import { scopeRanges } from '../lib/javaParse.js';
 import { receiverOf, resolveReceiver, libMembers, projectMembers, callAt } from '../lib/completion.js';
 import { infoFor } from '../model.js';
+import { registerEditor } from '../lib/tour.js';
+import { proposalFor } from '../agent.js';
+import { lineDiff } from '../lib/diff.js';
 import Icon from './Icon.jsx';
 import DocsView from './DocsView.jsx';
+import PopOut from './PopOut.jsx';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -291,7 +295,12 @@ function AiPrompt({ editorRef }) {
     <form className="ai-prompt" style={{ top }} onSubmit={submit}>
       <Icon name="tutor" />
       {busy ? (
-        <span className="ai-busy">{t('ai.working')} <span className="muted">„{busy.instruction}“</span></span>
+        <>
+          <span className="ai-busy">{t('ai.working')} <span className="muted">„{busy.instruction}“</span></span>
+          <button type="button" className="icon-btn" aria-label={t('tutor.stop')} title={t('tutor.stop')} onClick={A.stopEdit}>
+            <Icon name="close" />
+          </button>
+        </>
       ) : (
         <>
           <input ref={inputRef} value={text} onChange={(e) => setText(e.target.value)} placeholder={sel ? t('ai.placeholderSel', { from: sel.from, to: sel.to }) : t('ai.placeholder')} onKeyDown={(e) => e.key === 'Escape' && setState({ aiPrompt: null })} spellCheck="false" />
@@ -320,6 +329,10 @@ export default function EditorPanel() {
   const mode = useStore((s) => s.editorMode || 'source');
   const cursor = useStore((s) => s.cursor);
   const hasKey = useStore((s) => A.aiOn(s));
+  const proposals = useStore((s) => s.agent.proposals);
+  const agentHighlight = useStore((s) => s.agentHighlight);
+  // The chat card next to this editor has the buttons; the bar then only points at the change.
+  const cardBeside = useStore((s) => !PANEL && !!s.tutorOpen && s.side === 'tutor' && !(s.layout && s.layout.detached.includes('side')));
   const hostRef = useRef(null);
   const editorRef = useRef(null);
   const applying = useRef(false);
@@ -359,7 +372,8 @@ export default function EditorPanel() {
       'semanticHighlighting.enabled': false,
     });
     editorRef.current = ed;
-    for (const k of ['scope', 'bp', 'dbg', 'ex']) decos.current[k] = ed.createDecorationsCollection();
+    registerEditor(ed);
+    for (const k of ['scope', 'bp', 'dbg', 'ex', 'agent']) decos.current[k] = ed.createDecorationsCollection();
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       const name = getState().activeTab;
       if (name) A.saveFile(name);
@@ -420,6 +434,7 @@ export default function EditorPanel() {
         items.push({ type: 'sep' });
         if (hasSel) items.push({ label: tr('edit.explain'), icon: 'tutor', onClick: () => A.askTutor(tr('tutor.prompt.explainSelection')) });
         if (!ro) items.push({ label: tr('ai.write'), icon: 'pencil', keys: 'ctrl I', onClick: () => setState({ aiPrompt: { at: Date.now() } }) });
+        items.push({ label: tr(s.settings.aiInline ? 'edit.aiInlineOff' : 'edit.aiInlineOn'), onClick: () => A.updateSettings({ aiInline: !s.settings.aiInline }) });
       }
       items.push({ type: 'sep' });
       if (isCode) items.push({ label: tr(hasBp ? 'edit.bpRemove' : 'edit.bpAdd', { line }), keys: 'F9', onClick: () => A.toggleBreakpoint(name, line) });
@@ -449,6 +464,7 @@ export default function EditorPanel() {
     });
     return () => {
       clearTimeout(saveTimer.current);
+      registerEditor(null);
       ed.dispose();
     };
   }, []);
@@ -557,6 +573,21 @@ export default function EditorPanel() {
     return () => clearTimeout(t0);
   }, [reveal, active]);
 
+  // The lines the tutor points at (open_file with a range): a short, quiet highlight.
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed || !decos.current.agent) return undefined;
+    if (!agentHighlight || agentHighlight.file !== active || !ed.getModel()) {
+      decos.current.agent.clear();
+      return undefined;
+    }
+    const m = ed.getModel();
+    const to = Math.min(agentHighlight.to, m.getLineCount());
+    decos.current.agent.set([{ range: new monaco.Range(agentHighlight.from, 1, to, 1), options: { isWholeLine: true, className: 'agent-hl' } }]);
+    const timer = setTimeout(() => decos.current.agent.clear(), Math.max(0, 1600 - (Date.now() - agentHighlight.at)));
+    return () => clearTimeout(timer);
+  }, [agentHighlight, active]);
+
   useEffect(() => {
     const ed = editorRef.current;
     if (!ed || !insertRequest || !ed.getModel()) return;
@@ -631,6 +662,8 @@ export default function EditorPanel() {
     if (ed && ed.getModel()) ed.getAction('editor.action.formatDocument').run();
   };
   const hasSelection = selection && selection.file === active;
+  const proposal = active && active !== '#readme' ? proposalFor(proposals, active) : null;
+  const proposalStat = proposal ? lineDiff(proposal.before, proposal.after) : null;
 
   return (
     <section className="panel editor-panel" aria-label="Editor">
@@ -645,6 +678,7 @@ export default function EditorPanel() {
                 key={name}
                 className="tab"
                 role="tab"
+                data-tour={name === '#readme' ? undefined : 'editor-tab:' + name}
                 aria-selected={name === active}
                 title={name}
                 onClick={() => A.openFile(name)}
@@ -665,7 +699,7 @@ export default function EditorPanel() {
                 }}
               >
                 <span className="tab-label">{label}</span>
-                {A.isDirty(f) ? <span className="dirty" title={t('editor.unsaved')} /> : null}
+                {A.isDirty(f) ? <span className="dirty" title={t('editor.unsaved')} /> : proposalFor(proposals, name) ? <span className="dirty" title={t('agent.bar.text')} /> : null}
                 <span className="tab-close" role="button" aria-label={t('common.close')} onClick={(e) => { e.stopPropagation(); A.saveFile(name); A.closeTab(name); }}>
                   <Icon name="close" />
                 </span>
@@ -676,23 +710,24 @@ export default function EditorPanel() {
         <span className="grow" />
         {isJava && (
           <div className="editor-tools">
-            <div className="seg seg-sm" role="group">
+            <div className="seg seg-sm" role="group" data-tour="editor-mode">
               <button aria-pressed={mode === 'source'} onClick={() => setState({ editorMode: 'source' })}>{t('editor.source')}</button>
               <button aria-pressed={mode === 'docs'} onClick={() => setState({ editorMode: 'docs' })}>{t('editor.docs')}</button>
             </div>
-            <button className="icon-btn" title={t('editor.format') + ' (' + formatKeys(settings.lang, 'shift Alt F', '+') + ')'} aria-label={t('editor.format')} onClick={format} disabled={project.readOnly || mode !== 'source'}>
+            <button className="icon-btn" data-tour="format" title={t('editor.format') + ' (' + formatKeys(settings.lang, 'shift Alt F', '+') + ')'} aria-label={t('editor.format')} onClick={format} disabled={project.readOnly || mode !== 'source'}>
               <Icon name="indent" />
             </button>
             {!settings.aiOff && (
               <>
                 {hasKey && (
-                <button className="btn btn-sm btn-quiet ai-btn" title={t('ai.write') + ' (' + formatKeys(settings.lang, 'ctrl I', '+') + ')'} onClick={() => setState({ aiPrompt: { at: Date.now() } })} disabled={project.readOnly || mode !== 'source'}>
+                <button className="btn btn-sm btn-quiet ai-btn" data-tour="ai-write" title={t('ai.write') + ' (' + formatKeys(settings.lang, 'ctrl I', '+') + ')'} onClick={() => setState({ aiPrompt: { at: Date.now() } })} disabled={project.readOnly || mode !== 'source'}>
                   <Icon name="pencil" />
                   <span className="wide-only">{t('ai.writeShort')}</span>
                 </button>
                 )}
                 <button
                   className="btn btn-sm btn-quiet"
+                  data-tour="explain"
                   title={hasSelection ? t('editor.explain') : t('editor.explainFile')}
                   onClick={() => A.askTutor(hasSelection ? translate(settings.lang, 'tutor.prompt.explainSelection') : translate(settings.lang, 'tutor.prompt.explainFile', { file: A.simpleName(file.className) + '.java' }))}
                 >
@@ -703,7 +738,24 @@ export default function EditorPanel() {
             )}
           </div>
         )}
+        <PopOut panel="editor" />
       </div>
+      {proposal && (
+        <div className={'proposal-bar' + (cardBeside ? ' quiet' : '')}>
+          <span>{t(cardBeside ? 'agent.bar.open' : 'agent.bar.text')}</span>
+          {proposalStat && <span className="stat">+{proposalStat.added} −{proposalStat.removed}</span>}
+          <span className="grow" />
+          {cardBeside ? (
+            <button className="link" onClick={() => setState({ dialog: { type: 'diff', proposalId: proposal.id, file: proposal.file, original: proposal.before, modified: proposal.after } })}>{t('agent.diff.view')}</button>
+          ) : (
+            <>
+              <button className="btn btn-sm btn-quiet" onClick={() => setState({ dialog: { type: 'diff', proposalId: proposal.id, file: proposal.file, original: proposal.before, modified: proposal.after } })}>{t('agent.diff.view')}</button>
+              <button className="btn btn-sm btn-quiet" disabled={!!proposal.busy} onClick={() => A.rejectProposal(proposal.id)}>{t('agent.diff.reject')}</button>
+              <button className="btn btn-sm btn-primary" data-tour="proposal-accept" disabled={!!proposal.busy} onClick={() => A.acceptProposal(proposal.id)}>{t('agent.diff.accept')}</button>
+            </>
+          )}
+        </div>
+      )}
       {isJava && mode === 'source' && (files[active].pkg || method || (compile.state === 'errors' && hasKey && compile.problems.some((p) => p.file === active))) && (
         <div className="breadcrumb">
           <span className="muted">{files[active].pkg ? files[active].pkg + ' ›' : ''}</span>
@@ -720,7 +772,7 @@ export default function EditorPanel() {
           )}
         </div>
       )}
-      <div className="editor-wrap">
+      <div className="editor-wrap" data-tour="editor">
         <div className="editor-host" ref={hostRef} style={{ visibility: file && (mode === 'source' || !isJava) ? 'visible' : 'hidden' }} />
         {isJava && mode === 'docs' && <DocsView info={info} />}
         {!file && <div className="editor-empty">{t('editor.none')}</div>}

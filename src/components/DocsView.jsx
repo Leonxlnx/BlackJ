@@ -1,5 +1,5 @@
 import { useT } from '../i18n.js';
-import * as A from '../actions.js';
+import A from '../panels.js';
 
 const sig = (m, ctor) => `${ctor ? '' : m.returnType + ' '}${m.name}(${m.params.map((p) => `${p.type} ${p.name}`).join(', ')})`;
 

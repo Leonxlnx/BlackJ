@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store.js';
 import { useT } from '../i18n.js';
-import * as A from '../actions.js';
+import A from '../panels.js';
 
 export function valueText(v) {
   if (!v) return '';
@@ -40,7 +40,7 @@ export default function InspectorPanel() {
 
   if (!inspect || !top) {
     return (
-      <div className="side-body">
+      <div className="side-body" data-tour="inspector">
         <div className="side-empty">
           <p>{t('inspect.empty')}</p>
         </div>
@@ -59,7 +59,7 @@ export default function InspectorPanel() {
   const isHandle = String(top.ref).startsWith('#');
 
   return (
-    <div className="side-body inspector">
+    <div className="side-body inspector" data-tour="inspector">
       <div className="insp-head">
         <div className="insp-trail">
           {stack.map((s, i) => (

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useStore } from '../store.js';
 import { useT, formatNumber } from '../i18n.js';
-import * as A from '../actions.js';
+import A from '../panels.js';
 import Icon from './Icon.jsx';
 
 const STATUS = { passed: 'ok', failed: 'bad', error: 'bad', skipped: 'off' };
@@ -35,7 +35,7 @@ export default function TestsPanel() {
   return (
     <div className="tests">
       <div className="tests-bar">
-        <button className="btn btn-sm" onClick={() => A.runTests({ all: true })} disabled={tests.running}>
+        <button className="btn btn-sm" data-tour="tests-run" onClick={() => A.runTests({ all: true })} disabled={tests.running}>
           <Icon name="play" />
           {tests.running ? t('tests.running') : t('tests.runAll')}
         </button>

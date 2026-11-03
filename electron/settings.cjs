@@ -19,10 +19,12 @@ const DEFAULTS = {
   model: 'claude-opus-5-5',
   tutorMode: 'hints',
   sendContext: true,
-  showCosts: true,
+  agentWrite: false,
+  showCosts: false,
   rememberKey: true,
   recent: [],
   windowBounds: null,
+  panelBounds: {},
 };
 
 class Settings {

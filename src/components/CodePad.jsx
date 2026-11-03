@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store.js';
 import { useT } from '../i18n.js';
-import * as A from '../actions.js';
+import A from '../panels.js';
 import { explainProblem } from '../lib/errors.js';
 import { explainException } from '../lib/exceptions.js';
 import { valueText } from './InspectorPanel.jsx';
@@ -102,7 +102,7 @@ export default function CodePad() {
             </div>
           ))}
         </div>
-        <div className="pad-input">
+        <div className="pad-input" data-tour="pad-input">
           <span className="pad-prompt">›</span>
           <textarea
             ref={inputRef}

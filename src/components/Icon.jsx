@@ -40,6 +40,7 @@ const P = {
   globe: <><circle cx="12" cy="12" r="8.5" /><path d="M3.5 12h17M12 3.5c2.5 2.6 2.5 14.4 0 17M12 3.5c-2.5 2.6-2.5 14.4 0 17" /></>,
   record: <circle cx="12" cy="12" r="5" />,
   sidebar: <><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><path d="M14.5 4.5v15" /></>,
+  layout: <><rect x="3.5" y="4.5" width="17" height="15" rx="2" /><path d="M3.5 13.5h17M10 4.5v9" /></>,
   keyboard: <><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M7 14h10" /></>,
   image: <><rect x="3.5" y="5" width="17" height="14" rx="2" /><circle cx="9" cy="10" r="1.5" /><path d="M20.5 15.5l-4.5-4.5-8 8" /></>,
   arrange: <><rect x="4" y="4" width="6" height="5" rx="1" /><rect x="14" y="4" width="6" height="5" rx="1" /><rect x="9" y="15" width="6" height="5" rx="1" /><path d="M7 9v3h10V9M12 12v3" /></>,

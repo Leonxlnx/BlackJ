@@ -2,15 +2,22 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useStore, setState, getState } from '../store.js';
 import { useT, formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
-import { childPackages, simpleName, flowLayout } from '../model.js';
+import { childPackages, simpleName, flowLayout, layoutScore, routeEdge, spreadPorts } from '../model.js';
 import { signature } from '../lib/javaParse.js';
 import Icon from './Icon.jsx';
 
 const VIS = { public: '+', private: '−', protected: '#', package: '~' };
 const MAX_MEMBERS = 7;
 const SNAP = 8;
-// The smallest zoom at which class names and members stay readable.
-const MIN_K = 0.75;
+// The smallest zoom the automatic fit uses: below it card text drops under 11px. When even the
+// compact cards do not fit at this zoom, the canvas pans instead of shrinking them further.
+const MIN_K = 0.9;
+// Cards keep their member lists down to this zoom; a tall panel is better used for them than
+// left empty below compact cards.
+const FULL_K = 0.85;
+// The row gap of cards without member lists, and the tighter one used before the canvas has to pan.
+const ROW_GAP = 44;
+const TIGHT_GAP = 32;
 
 function clip(a, p) {
   const cx = a.x + a.w / 2;
@@ -22,14 +29,46 @@ function clip(a, p) {
   return { x: cx + dx * s, y: cy + dy * s };
 }
 
-/** A straight edge: "uses" (dashed, open head), or inheritance between cards that sit side by side. */
-function Edge({ from, to, kind, hl }) {
+/** A path through points with its corners rounded. */
+function roundedPath(pts, r = 6) {
+  let d = `M${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i - 1];
+    const c = pts[i];
+    const n = pts[i + 1];
+    const k = Math.min(r, Math.hypot(c.x - p.x, c.y - p.y) / 2, Math.hypot(n.x - c.x, n.y - c.y) / 2);
+    const u = (q) => {
+      const l = Math.hypot(q.x - c.x, q.y - c.y) || 1;
+      return { x: c.x + ((q.x - c.x) / l) * k, y: c.y + ((q.y - c.y) / l) * k };
+    };
+    const a = u(p);
+    const b = u(n);
+    d += ` L${a.x} ${a.y} Q${c.x} ${c.y} ${b.x} ${b.y}`;
+  }
+  const last = pts[pts.length - 1];
+  return d + ` L${last.x} ${last.y}`;
+}
+
+/** An edge drawn as a line: "uses" (dashed, open head, routed around cards in the way), or
+    inheritance between cards that sit side by side. */
+function Edge({ from, to, kind, hl, points }) {
   const cls = (kind === 'uses' ? 'uses' : kind === 'impl' ? 'impl' : '') + (hl ? ' hl' : '');
   const head = (b, ang, len = 11, spread = 0.5) => {
     const p1 = { x: b.x - len * Math.cos(ang - spread), y: b.y - len * Math.sin(ang - spread) };
     const p2 = { x: b.x - len * Math.cos(ang + spread), y: b.y - len * Math.sin(ang + spread) };
     return { p1, p2, base: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 } };
   };
+  if (points && points.length >= 2) {
+    const b = points[points.length - 1];
+    const p = points[points.length - 2];
+    const h = head(b, Math.atan2(b.y - p.y, b.x - p.x), 9, 0.45);
+    return (
+      <g>
+        <path className={cls} d={roundedPath(points)} />
+        <path className={'open' + (hl ? ' hl' : '')} d={`M${h.p1.x} ${h.p1.y} L${b.x} ${b.y} L${h.p2.x} ${h.p2.y}`} />
+      </g>
+    );
+  }
   const c1 = { x: from.x + from.w / 2, y: from.y + from.h / 2 };
   const c2 = { x: to.x + to.w / 2, y: to.y + to.h / 2 };
   const a = clip(from, c2);
@@ -48,15 +87,16 @@ function Edge({ from, to, kind, hl }) {
   );
 }
 
-/** Inheritance as a tree: every child below its parent rises to one shared bus, and a single
-    hollow triangle sits on the parent's bottom edge. */
+/** Inheritance as a tree: every child below its parent rises to one shared bus just above the
+    highest child, one trunk runs up from there, and a single hollow triangle sits on the parent's
+    bottom edge. */
 function InheritTree({ parent, kids, kind, hl }) {
   const cls = kind === 'impl' ? 'impl' : '';
   const px = Math.round(parent.x + parent.w / 2);
   const tip = parent.y + parent.h;
   const base = tip + 10;
   const top = Math.min(...kids.map((k) => k.rect.y));
-  const bus = Math.round(base + Math.max(10, Math.min(28, (top - base) / 2)));
+  const bus = Math.round(Math.max(base + 10, top - Math.min(24, (top - base) / 2)));
   const anyHl = hl || kids.some((k) => k.hl);
   const branch = ({ rect }) => {
     const cx = Math.round(rect.x + rect.w / 2);
@@ -127,34 +167,34 @@ async function classMenu(cls, x, y, t) {
       else if (desc.kind === 'interface') items.push({ type: 'note', text: t('menu.interfaceNote') });
       else if (desc.kind === 'class') {
         if (!desc.constructors.length) items.push({ type: 'note', text: t('menu.noCtor') });
-        for (const c of desc.constructors) {
-          items.push({ label: <span className="sig">new {simple}({c.params.map((p) => `${p.type} ${p.name}`).join(', ')})</span>, onClick: () => A.openDialogBox({ type: 'call', kind: 'new', cls, method: c }) });
+        for (const [i, c] of desc.constructors.entries()) {
+          items.push({ tour: i === 0 ? 'new' : 'new:' + i, label: <span className="sig">new {simple}({c.params.map((p) => `${p.type} ${p.name}`).join(', ')})</span>, onClick: () => A.openDialogBox({ type: 'call', kind: 'new', cls, method: c }) });
         }
       }
       const statics = desc.methods.filter((m) => m.static && !(m.name === 'main' && m.params.length === 1) && m.declaringClass === desc.name);
       if (statics.length) items.push({ type: 'sep' });
       for (const m of statics) {
-        items.push({ label: <span className="sig"><span className="ret">static {m.returnType} </span>{m.name}({m.params.map((p) => `${p.type} ${p.name}`).join(', ')})</span>, onClick: () => A.openDialogBox({ type: 'call', kind: 'static', cls, method: m }) });
+        items.push({ tour: 'static:' + m.name, label: <span className="sig"><span className="ret">static {m.returnType} </span>{m.name}({m.params.map((p) => `${p.type} ${p.name}`).join(', ')})</span>, onClick: () => A.openDialogBox({ type: 'call', kind: 'static', cls, method: m }) });
       }
       items.push({ type: 'sep' });
-      if (info && info.hasMain) items.push({ label: t('menu.runMain'), icon: 'play', onClick: () => A.runMain(cls) });
+      if (info && info.hasMain) items.push({ label: t('menu.runMain'), tour: 'runMain', icon: 'play', onClick: () => A.runMain(cls) });
       if (info && info.isTest) {
-        items.push({ label: t('menu.runTests'), icon: 'check', onClick: () => A.runTests({ className: cls }) });
-        items.push({ label: t('menu.record'), icon: 'record', onClick: () => A.openDialogBox({ type: 'record', cls }) });
+        items.push({ label: t('menu.runTests'), tour: 'runTests', icon: 'check', onClick: () => A.runTests({ className: cls }) });
+        items.push({ label: t('menu.record'), tour: 'record', icon: 'record', onClick: () => A.openDialogBox({ type: 'record', cls }) });
       }
-      items.push({ label: t('menu.inspectClass'), icon: 'eye', onClick: () => A.showInspector(cls, simple, true) });
+      items.push({ label: t('menu.inspectClass'), tour: 'inspectClass', icon: 'eye', onClick: () => A.showInspector(cls, simple, true) });
     }
   } else {
     items.push({ label: t('menu.compileFirst'), disabled: true });
-    items.push({ label: t('menu.compileNow'), icon: 'build', onClick: A.compile });
+    items.push({ label: t('menu.compileNow'), tour: 'compileNow', icon: 'build', onClick: A.compile });
   }
   items.push({ type: 'sep' });
-  items.push({ label: t('menu.open'), icon: 'file', onClick: () => A.openClass(cls) });
-  if (info && !info.isTest && info.kind !== 'interface' && !s.project.readOnly) items.push({ label: t('menu.createTest'), icon: 'check', onClick: () => A.newClass(simple + 'Test', 'test') });
-  if (!s.settings.aiOff) items.push({ label: t('menu.explain'), icon: 'tutor', onClick: () => { A.openClass(cls); setTimeout(() => A.askTutor(t('tutor.prompt.explainClass', { name: simple })), 50); } });
+  items.push({ label: t('menu.open'), tour: 'open', icon: 'file', onClick: () => A.openClass(cls) });
+  if (info && !info.isTest && info.kind !== 'interface' && !s.project.readOnly) items.push({ label: t('menu.createTest'), tour: 'createTest', icon: 'check', onClick: () => A.newClass(simple + 'Test', 'test') });
+  if (!s.settings.aiOff) items.push({ label: t('menu.explain'), tour: 'explain', icon: 'tutor', onClick: () => { A.openClass(cls); setTimeout(() => A.askTutor(t('tutor.prompt.explainClass', { name: simple })), 50); } });
   if (!s.project.readOnly) {
     items.push({ type: 'sep' });
-    items.push({ label: t('menu.delete'), icon: 'trash', danger: true, onClick: () => A.openDialogBox({ type: 'delete', cls }) });
+    items.push({ label: t('menu.delete'), tour: 'delete', icon: 'trash', danger: true, onClick: () => A.openDialogBox({ type: 'delete', cls }) });
   }
   A.openMenu({ x, y, items });
 }
@@ -193,8 +233,8 @@ export default function Diagram({ model }) {
   const gridStep = 24 * view.k * (view.k < 0.5 ? 4 : 1);
   const [panning, setPanning] = useState(false);
   const [dragging, setDragging] = useState(null);
-  // The width (in diagram units) the flow layout packs into, set by fit().
-  const [flowW, setFlowW] = useState(null);
+  // The width (in diagram units) the flow layout packs into and its row gap, set by fit().
+  const [flowAt, setFlowAt] = useState(null);
   const [compact, setCompact] = useState(false);
   // Card sizes with their member lists, kept while compact hides them.
   const fullSizes = useRef({});
@@ -221,9 +261,9 @@ export default function Diagram({ model }) {
   // packed for the panel's width; after that the stored positions count.
   const manual = !!positions['#moved:' + pkg];
   const sizeOf = (sz) => (k) => sz[k] || { w: 200, h: 90 };
-  // Compact cards are short, so their rows sit closer together.
-  const gapY = (c) => (c ? 44 : 56);
-  const flow = !manual && flowW ? flowLayout(model, keys, sizeOf(sizes), flowW, 40, gapY(compact)) : null;
+  // Cards without member lists are short, so their rows sit closer together.
+  const gapY = (short) => (short ? ROW_GAP : 56);
+  const flow = !manual && flowAt ? flowLayout(model, keys, sizeOf(sizes), flowAt.w, 40, flowAt.gap) : null;
   const pos = (k) => (flow && flow[k]) || positions[k] || { x: 32, y: 32 };
   // The README note (root) or the "parent package" card sits above the top-left of the content.
   const minX0 = keys.length ? Math.min(...keys.map((k) => pos(k).x)) : 32;
@@ -238,19 +278,25 @@ export default function Diagram({ model }) {
     const h = Math.max(...keys.map((k) => at[k].y + size(k).h)) - minY;
     return { minX, minY, w, h };
   };
+  /** Arrows of a layout that run through another card or cross each other. */
+  const crossings = (at, size) => layoutScore(model, keys, at, size).hard;
   const panelBox = () => {
     const host = hostRef.current;
     return { cw: Math.max(120, host.clientWidth - 48), ch: Math.max(120, host.clientHeight - 24 - 56) };
   };
+  // Content taller than the panel ends above the zoom tools, so the lowest row (often the class
+  // with main) stays in full view and the rows above it scroll.
   const viewFor = (b, k) => {
-    const { cw } = panelBox();
+    const { cw, ch } = panelBox();
     const x = b.w * k > cw ? 24 - b.minX * k : 24 + (cw - b.w * k) / 2 - b.minX * k;
-    return { k, x: Math.round(x), y: Math.round(24 - b.minY * k) };
+    const y = b.h * k > ch ? 24 + ch - (b.minY + b.h) * k : 24 - b.minY * k;
+    return { k, x: Math.round(x), y: Math.round(y) };
   };
   // Fits the content into the panel with 24px around it and a 56px band at the bottom for the
-  // zoom tools. Below 75% cards get too small to read, so the flow layout first repacks the
-  // cards for the panel's width; if that is not enough the cards drop their member lists
-  // (compact) for as long as the full cards would not fit at 75%.
+  // zoom tools, by width and by height. Small cards are hard to read, so the flow layout first
+  // repacks the cards for the panel's width; if that is not enough the cards drop their member
+  // lists (compact) for as long as the full cards would not fit at 85%, and compact cards are
+  // never fitted below 90%: their rows move closer together first, then the canvas pans.
   const moved = useRef(false);
   const fit = (override) => {
     const host = hostRef.current;
@@ -265,14 +311,23 @@ export default function Diagram({ model }) {
         const b = bbox(at, size);
         return { w: null, b, k: scale(b) };
       }
-      let best = null;
-      for (const t of [1, 0.9, 0.85, 0.8, MIN_K]) {
+      const short = c || !details;
+      const floor = short ? MIN_K : FULL_K;
+      const pack = (gap) => [1, 0.95, MIN_K, FULL_K].map((t) => {
         const w = Math.floor(cw / t);
-        const b = bbox(flowLayout(model, keys, size, w, 40, gapY(c)), size);
-        const k = scale(b);
-        if (!best || k > best.k + 0.001) best = { w, b, k };
-      }
-      return best;
+        const at = flowLayout(model, keys, size, w, 40, gap);
+        const b = bbox(at, size);
+        return { w, gap, b, k: scale(b), crossed: crossings(at, size) };
+      });
+      let cands = pack(gapY(short));
+      if (short && !cands.some((x) => x.k >= floor)) cands = cands.concat(pack(TIGHT_GAP));
+      // A packing whose inheritance arrows run through other cards reads wrong (Katze would seem
+      // to extend Hund): among the readable ones the fewest crossings win, then the zoom; at
+      // (almost) the same zoom the wider packing.
+      const readable = cands.filter((x) => x.k >= floor);
+      const pool = readable.length ? readable.filter((x) => x.crossed === Math.min(...readable.map((y) => y.crossed))) : cands;
+      const top = Math.max(...pool.map((x) => x.k));
+      return pool.filter((x) => x.k >= top - 0.02).pop();
     };
     if (details) {
       if (compact && keys.some((k) => !fullSizes.current[k])) {
@@ -280,7 +335,7 @@ export default function Diagram({ model }) {
         return;
       }
       const full = plan(compact ? fullSizes.current : sizes, false);
-      const want = full.k < MIN_K;
+      const want = full.k < FULL_K;
       if (want !== compact) {
         setCompact(want);
         return;
@@ -290,8 +345,9 @@ export default function Diagram({ model }) {
       return;
     }
     const p = plan(sizes, compact);
-    if (!manual) setFlowW(p.w);
-    setView(viewFor(p.b, Math.max(0.3, p.k)));
+    if (!manual) setFlowAt({ w: p.w, gap: p.gap });
+    // Full cards are never fitted below FULL_K (they turn compact first); compact ones stop at MIN_K.
+    setView(viewFor(p.b, Math.max(compact || !details ? MIN_K : 0.3, p.k)));
   };
   const fitRef = useRef(fit);
   fitRef.current = fit;
@@ -432,12 +488,15 @@ export default function Diagram({ model }) {
   for (const e of edges) {
     const a = rects[e.from];
     const b = rects[e.to];
-    if (e.kind !== 'uses' && a.y > b.y + b.h + 32) {
+    if (e.kind !== 'uses' && a.y > b.y + b.h + 24) {
       const id = e.to + '|' + e.kind;
       if (!trees.has(id)) trees.set(id, { parent: e.to, kind: e.kind, kids: [] });
       trees.get(id).kids.push({ key: e.from, rect: a, hl: highlight === e.from });
     } else straight.push(e);
   }
+  // "Uses" arrows are routed around the cards in the way, each with its own port on a card's side.
+  const routes = new Map(straight.filter((e) => e.kind === 'uses').map((e) => [e, { from: e.from, to: e.to, pts: routeEdge(rects[e.from], rects[e.to], keys.filter((k) => k !== e.from && k !== e.to).map((k) => rects[k])) }]));
+  spreadPorts([...routes.values()], rects);
 
   /** Arrow keys move the selection to the nearest class card in that direction. */
   const moveSelection = (from, key) => {
@@ -464,6 +523,27 @@ export default function Diagram({ model }) {
     }
   };
   const kinds = new Set(edges.map((e) => e.kind));
+
+  // The tutor (or a tutorial) points at a card: pan just enough to bring it into view. This is not
+  // the user moving the canvas, so fitting on resize keeps working.
+  const revealCard = useStore((s) => s.revealCard);
+  useEffect(() => {
+    const host = hostRef.current;
+    const r = revealCard && rects[revealCard.key];
+    if (!host || !r || !sizes[revealCard.key]) return;
+    const m = 24;
+    const left = r.x * view.k + view.x;
+    const top = r.y * view.k + view.y;
+    const w = r.w * view.k;
+    const h = r.h * view.k;
+    let dx = 0;
+    let dy = 0;
+    if (left < m) dx = m - left;
+    else if (left + w > host.clientWidth - m) dx = Math.max(m - left, host.clientWidth - m - (left + w));
+    if (top < m) dy = m - top;
+    else if (top + h > host.clientHeight - 56) dy = Math.max(m - top, host.clientHeight - 56 - (top + h));
+    if (dx || dy) setView((v) => ({ ...v, x: Math.round(v.x + dx), y: Math.round(v.y + dy) }));
+  }, [revealCard && revealCard.at, !!(revealCard && sizes[revealCard.key])]);
 
   const onWheel = (e) => {
     moved.current = true;
@@ -549,10 +629,10 @@ export default function Diagram({ model }) {
         <span className="grow" />
         {!readOnly && (
           <>
-            <button className="icon-btn" aria-label={t('ws.newClass')} title={t('ws.newClass') + ' · ' + formatKeys(lang, 'ctrl N', '+')} onClick={() => A.openDialogBox({ type: 'newClass' })}>
+            <button className="icon-btn" data-tour="new-class" aria-label={t('ws.newClass')} title={t('ws.newClass') + ' · ' + formatKeys(lang, 'ctrl N', '+')} onClick={() => A.openDialogBox({ type: 'newClass' })}>
               <Icon name="plus" />
             </button>
-            <button className="icon-btn" aria-label={t('diagram.newPackage')} title={t('diagram.newPackage')} onClick={() => A.openDialogBox({ type: 'newPackage' })}>
+            <button className="icon-btn" data-tour="new-package" aria-label={t('diagram.newPackage')} title={t('diagram.newPackage')} onClick={() => A.openDialogBox({ type: 'newPackage' })}>
               <Icon name="folderPlus" />
             </button>
           </>
@@ -564,12 +644,13 @@ export default function Diagram({ model }) {
           <Icon name="link" />
         </button>
         {!readOnly && (
-          <button className="icon-btn" aria-label={t('diagram.arrange')} title={t('diagram.arrange')} onClick={A.arrange}>
+          <button className="icon-btn" data-tour="arrange" aria-label={t('diagram.arrange')} title={t('diagram.arrange')} onClick={A.arrange}>
             <Icon name="arrange" />
           </button>
         )}
         <button
           className="icon-btn diagram-more"
+          data-tour="diagram-more"
           aria-label={t('diagram.more')}
           title={t('diagram.more')}
           onClick={(e) => {
@@ -596,7 +677,7 @@ export default function Diagram({ model }) {
           <Icon name="more" />
         </button>
       </div>
-      <div className={'diagram' + (panning ? ' panning' : '') + (compact ? ' compact' : '')} ref={hostRef} onPointerDown={startPan} onWheel={onWheel} style={{ backgroundSize: `${gridStep}px ${gridStep}px`, backgroundPosition: `${view.x}px ${view.y}px` }}>
+      <div className={'diagram' + (panning ? ' panning' : '') + (compact ? ' compact' : '')} data-tour="diagram" ref={hostRef} onPointerDown={startPan} onWheel={onWheel} style={{ backgroundSize: `${gridStep}px ${gridStep}px`, backgroundPosition: `${view.x}px ${view.y}px` }}>
         {keys.length === 0 && !pkg ? (
           <div className="diagram-empty">
             <span>{t('diagram.empty')}</span>
@@ -609,7 +690,14 @@ export default function Diagram({ model }) {
           <div className="world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}>
             <svg className="edges" width="1" height="1">
               {straight.map((e, i) => (
-                <Edge key={i} from={rects[e.from]} to={rects[e.to]} kind={e.kind} hl={highlight && (e.from === highlight || e.to === highlight) && e.kind !== 'uses'} />
+                <Edge
+                  key={i}
+                  from={rects[e.from]}
+                  to={rects[e.to]}
+                  kind={e.kind}
+                  points={routes.has(e) ? routes.get(e).pts : null}
+                  hl={highlight && (e.from === highlight || e.to === highlight) && e.kind !== 'uses'}
+                />
               ))}
               {[...trees.entries()].map(([id, tr]) => (
                 <InheritTree key={id} parent={rects[tr.parent]} kids={tr.kids} kind={tr.kind} hl={highlight === tr.parent} />
@@ -617,7 +705,7 @@ export default function Diagram({ model }) {
             </svg>
 
             {readme && !pkg && (
-              <div className="dcard note-card" style={{ left: noteAt.x, top: noteAt.y }} onDoubleClick={A.openReadme} onClick={A.openReadme} role="button" tabIndex={0} title={readme.name}>
+              <div className="dcard note-card" data-tour="readme" style={{ left: noteAt.x, top: noteAt.y }} onDoubleClick={A.openReadme} onClick={A.openReadme} role="button" tabIndex={0} title={readme.name}>
                 <Icon name="file" />
                 <span>{readme.name}</span>
               </div>
@@ -638,6 +726,7 @@ export default function Diagram({ model }) {
                   key={k}
                   ref={(el) => { cardRefs.current[k] = el; }}
                   className={'dcard pkg-card' + (dragging === k ? ' dragging' : '')}
+                  data-tour={'package:' + p}
                   style={{ left: pos(k).x, top: pos(k).y }}
                   onPointerDown={(e) => startDrag(e, k)}
                   onDoubleClick={() => A.enterPackage(p)}
@@ -669,6 +758,7 @@ export default function Diagram({ model }) {
                   key={cls}
                   ref={(el) => { cardRefs.current[cls] = el; }}
                   className={['dcard', 'class-card', info.kind, info.isTest ? 'test' : '', stale ? 'uncompiled' : '', selected === cls ? 'selected' : '', highlight === cls ? 'hl' : '', dragging === cls ? 'dragging' : ''].join(' ')}
+                  data-tour={'class:' + cls}
                   style={{ left: p.x, top: p.y }}
                   onPointerDown={(e) => startDrag(e, cls, () => setState({ selectedClass: cls }))}
                   onDoubleClick={() => A.openClass(cls)}
@@ -722,6 +812,7 @@ export default function Diagram({ model }) {
                   {(canNew || (info.isTest && compiledOk && !stale)) && (
                     <button
                       className="card-quick"
+                      data-tour={info.isTest ? undefined : 'class-new:' + cls}
                       title={info.isTest ? t('menu.runTests') : t('diagram.quickNew', { name: info.simple })}
                       aria-label={info.isTest ? t('menu.runTests') : t('diagram.quickNew', { name: info.simple })}
                       onPointerDown={(e) => e.stopPropagation()}
@@ -739,10 +830,10 @@ export default function Diagram({ model }) {
             })}
           </div>
         )}
-        <div className="diagram-tools">
-          <button className="icon-btn" aria-label="Zoom out" onClick={() => zoomBy(0.85)}><Icon name="minus" /></button>
+        <div className="diagram-tools" data-tour="zoom">
+          <button className="icon-btn" aria-label={t('diagram.zoomOut')} title={t('diagram.zoomOut')} onClick={() => zoomBy(0.85)}><Icon name="minus" /></button>
           <span className="zoom-label">{Math.round(view.k * 100)}%</span>
-          <button className="icon-btn" aria-label="Zoom in" onClick={() => zoomBy(1.15)}><Icon name="plus" /></button>
+          <button className="icon-btn" aria-label={t('diagram.zoomIn')} title={t('diagram.zoomIn')} onClick={() => zoomBy(1.15)}><Icon name="plus" /></button>
           <button className="icon-btn" aria-label={t('diagram.fit')} title={t('diagram.fit')} onClick={() => fit()}><Icon name="fit" /></button>
         </div>
         {kinds.size > 0 && (

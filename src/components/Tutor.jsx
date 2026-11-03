@@ -1,18 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { useStore, setState } from '../store.js';
+import { useStore, setState, getState } from '../store.js';
 import { useT, formatNumber, formatCost } from '../i18n.js';
-import * as A from '../actions.js';
+import A from '../panels.js';
 import { api } from '../api.js';
 import monaco from '../lib/monaco.js';
+import { waitingForStudent } from '../agent.js';
 import Icon from './Icon.jsx';
+import { ToolRows, DiffCard, ContextChips, groupParts } from './AgentParts.jsx';
 
 marked.setOptions({ gfm: true, breaks: false });
 
 function Markdown({ text, final, t }) {
   const ref = useRef(null);
-  const html = DOMPurify.sanitize(marked.parse(text || ''));
+  // Parsing and sanitising a long answer is not free: only when its text changed.
+  const html = useMemo(() => DOMPurify.sanitize(marked.parse(text || '')), [text]);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -43,6 +46,23 @@ function Markdown({ text, final, t }) {
     }
   }, [html, final]);
   const onClick = (e) => {
+    // A link never replaces the window: web links open in the browser (main allows only a few
+    // sites), a link to a project file opens it in the editor, anything else does nothing.
+    const a = e.target.closest('a[href]');
+    if (a) {
+      e.preventDefault();
+      const href = a.getAttribute('href') || '';
+      if (/^https:\/\//i.test(href)) api.openExternal(href);
+      else {
+        let name = href.replace(/^\.?\//, '').split(/[?#]/)[0];
+        try {
+          name = decodeURIComponent(name);
+        } catch { /* keep it as written */ }
+        const file = Object.keys(getState().files).find((n) => n === name || n.endsWith('/' + name));
+        if (file) A.openFile(file);
+      }
+      return;
+    }
     const b = e.target.closest('button[data-action]');
     if (!b) return;
     const code = b.closest('.code-block').dataset.code.replace(/\n$/, '');
@@ -98,7 +118,56 @@ function Setup() {
   );
 }
 
-function Turn({ turn, t, lang, showCosts, last }) {
+function Meta({ turn, t, lang, showCosts, last, waiting }) {
+  const lines = [];
+  if (waiting) lines.push(<div key="w" className="msg-meta">{t('agent.waiting')}</div>);
+  if (turn.status === 'aborted') lines.push(<div key="a" className="msg-meta">{t('tutor.aborted')}</div>);
+  if (turn.status === 'refusal') lines.push(<div key="r" className="msg-meta">{t('tutor.refusal')}</div>);
+  if (turn.status === 'error') {
+    const full = turn.error.code === 'chatFull';
+    lines.push(
+      <div key="e" className="msg-meta msg-error">
+        {t('tutor.err.' + turn.error.code, { message: turn.error.message })}
+        {last && !full && (
+          <>
+            {' '}
+            <button className="link" onClick={turn.partial ? A.continueLast : A.retryLast}>{t('tutor.retry')}</button>
+          </>
+        )}
+        {full && (
+          <>
+            {' '}
+            <button className="link" onClick={A.newChat}>{t('tutor.newChat')}</button>
+          </>
+        )}
+      </div>,
+    );
+  }
+  if (turn.status === 'done' && turn.limit) {
+    lines.push(
+      <div key="l" className="msg-meta">
+        {t('agent.limit')}{' '}
+        {last && <button className="link" onClick={() => A.askTutor(t('tutor.continuePrompt'))}>{t('agent.continue')}</button>}
+      </div>,
+    );
+  }
+  if (turn.status === 'done' && (turn.long || turn.full) && last) {
+    lines.push(
+      <div key="g" className="msg-meta">
+        {turn.full ? t('tutor.err.chatFull') : t('tutor.long')}{' '}
+        <button className="link" onClick={A.newChat}>{t('tutor.newChat')}</button>
+      </div>,
+    );
+  }
+  if (turn.status === 'done' && showCosts && turn.usage) {
+    // Only the price, and only while the answer is hovered or focused; the tokens are in the tooltip.
+    const p = { input: formatNumber(lang, turn.usage.input), output: formatNumber(lang, turn.usage.output), cost: formatCost(lang, turn.cost || 0), steps: turn.steps };
+    lines.push(<div key="u" className="msg-meta msg-cost" title={turn.steps > 1 ? t('tutor.usageSteps', p) : t('tutor.usage', p)}>≈ {p.cost}</div>);
+  }
+  return lines;
+}
+
+function Turn({ turn, t, lang, showCosts, last, proposals }) {
   if (turn.role === 'user') {
     return (
       <div className="msg-user">
@@ -107,28 +176,43 @@ function Turn({ turn, t, lang, showCosts, last }) {
       </div>
     );
   }
-  const busy = turn.status === 'waiting' || turn.status === 'thinking';
+  const parts = turn.parts || [];
+  const groups = groupParts(parts);
+  const running = ['waiting', 'thinking', 'working'].includes(turn.status);
+  const lastPart = parts[parts.length - 1];
+  const waiting = running && Object.values(proposals).some((p) => p.turnId === turn.id && p.status === 'pending');
   return (
     <div className="msg-ai">
-      {busy && !turn.text && <div className="msg-meta">{t('tutor.thinking')}</div>}
-      {turn.text && <Markdown text={turn.text + (turn.status === 'writing' ? '' : '')} final={turn.status === 'done'} t={t} />}
-      {turn.status === 'writing' && <span className="cursor-blink" aria-hidden="true" />}
-      {turn.status === 'aborted' && <div className="msg-meta">{t('tutor.aborted')}</div>}
-      {turn.status === 'refusal' && <div className="msg-meta">{t('tutor.refusal')}</div>}
-      {turn.status === 'error' && (
-        <div className="msg-meta msg-error">
-          {t('tutor.err.' + turn.error.code, { message: turn.error.message })}
-          {last && (
-            <>
-              {' '}
-              <button className="link" onClick={A.retryLast}>{t('tutor.retry')}</button>
-            </>
-          )}
-        </div>
-      )}
-      {turn.status === 'done' && showCosts && turn.usage && (
-        <div className="msg-meta">{t('tutor.usage', { input: formatNumber(lang, turn.usage.input), output: formatNumber(lang, turn.usage.output), cost: formatCost(lang, turn.cost) })}</div>
-      )}
+      {running && !parts.length && <div className="msg-meta">{t('tutor.thinking')}</div>}
+      {groups.map((g) => {
+        if (g.type === 'text') return g.text ? <Markdown key={g.key} text={g.text} final={!running} t={t} /> : null;
+        if (g.type === 'tools') return <ToolRows key={g.key} parts={g.parts} turnId={turn.id} />;
+        if (g.type === 'diff') return <DiffCard key={g.key} id={g.proposalId} />;
+        return null;
+      })}
+      {turn.status === 'working' && lastPart && lastPart.type === 'text' && <span className="cursor-blink" aria-hidden="true" />}
+      <Meta turn={turn} t={t} lang={lang} showCosts={showCosts} last={last} waiting={waiting} />
+    </div>
+  );
+}
+
+/** Up to three ways to start, the ones that fit what is open right now. */
+function Starters({ send, t }) {
+  const compileState = useStore((s) => s.compile.state);
+  const exception = useStore((s) => !!s.exception);
+  const exercise = useStore((s) => s.project && s.project.exercise && !(s.settings.exercisesDone || []).includes(s.project.exercise));
+  const file = useStore((s) => (s.activeTab && s.activeTab !== '#readme' && s.files[s.activeTab] ? A.simpleName(s.files[s.activeTab].className) : null));
+  const list = [
+    compileState === 'errors' && t('tutor.quick.errors'),
+    exception && t('tutor.start.exception'),
+    exercise && t('tutor.start.exercise'),
+    file && t('tutor.start.file', { name: file }),
+    t('tutor.start.tour'),
+    t('tutor.quick.next'),
+  ].filter(Boolean).slice(0, 3);
+  return (
+    <div className="quick">
+      {list.map((q) => <button key={q} onClick={() => send(q)}>{q}</button>)}
     </div>
   );
 }
@@ -138,21 +222,38 @@ export default function Tutor() {
   const hasKey = useStore((s) => s.info.tutor.hasKey);
   const chat = useStore((s) => s.chat);
   const settings = useStore((s) => s.settings);
-  const activeTab = useStore((s) => s.activeTab);
-  const compileState = useStore((s) => s.compile.state);
   const models = useStore((s) => s.info.tutor.models || []);
+  const proposals = useStore((s) => s.agent.proposals);
+  const draft = useStore((s) => s.tutorDraft);
   const [text, setText] = useState('');
   const listRef = useRef(null);
+  const inputRef = useRef(null);
   const model = models.find((m) => m.id === settings.model);
+  const pendingOnly = chat.busy && waitingForStudent();
 
   useEffect(() => {
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [chat.turns]);
 
+  // A question asked while the tutor was busy waits here until the student sends it.
+  useEffect(() => {
+    if (!draft) return;
+    setText(draft.text);
+    setState({ tutorDraft: null });
+    setTimeout(() => inputRef.current && inputRef.current.focus(), 0);
+  }, [draft]);
+
   const send = (q) => {
     const v = (q ?? text).trim();
     if (!v) return;
+    if (chat.busy) {
+      // Only waiting for a decision on a change: stop the turn (the card stays) and send this.
+      if (!waitingForStudent()) return;
+      A.sendAfterStop(v);
+      setText('');
+      return;
+    }
     A.askTutor(v);
     setText('');
   };
@@ -161,12 +262,12 @@ export default function Tutor() {
     <div className="side-body tutor">
       {hasKey && (
       <div className="tutor-sub">
-        <div className="seg" role="group" aria-label="Modus">
+        <div className="seg" role="group" aria-label={t('a11y.mode')} data-tour="tutor-mode">
           {['hints', 'explain'].map((m) => (
             <button key={m} aria-pressed={chat.mode === m} onClick={() => chat.mode !== m && A.setTutorMode(m)}>{t('tutor.mode.' + m)}</button>
           ))}
         </div>
-        <button className="btn btn-sm btn-quiet" onClick={A.newChat} disabled={!chat.turns.length}>
+        <button className="btn btn-sm btn-quiet" onClick={A.newChat} disabled={!chat.turns.length} data-tour="new-chat">
           {t('tutor.newChat')}
         </button>
       </div>
@@ -181,15 +282,11 @@ export default function Tutor() {
             {chat.turns.length === 0 && (
               <>
                 <p className="muted">{t('tutor.empty.' + chat.mode)}</p>
-                <div className="quick">
-                  {activeTab && <button onClick={() => send(t('tutor.quick.file'))}>{t('tutor.quick.file')}</button>}
-                  {compileState === 'errors' && <button onClick={() => send(t('tutor.quick.errors'))}>{t('tutor.quick.errors')}</button>}
-                  <button onClick={() => send(t('tutor.quick.next'))}>{t('tutor.quick.next')}</button>
-                </div>
+                <Starters send={send} t={t} />
               </>
             )}
             {chat.turns.map((turn, i) => (
-              <Turn key={turn.id} turn={turn} t={t} lang={settings.lang} showCosts={settings.showCosts} last={i === chat.turns.length - 1} />
+              <Turn key={turn.id} turn={turn} t={t} lang={settings.lang} showCosts={settings.showCosts} last={i === chat.turns.length - 1} proposals={proposals} />
             ))}
           </div>
           <form
@@ -199,36 +296,36 @@ export default function Tutor() {
               send();
             }}
           >
-            <div className="composer-box">
-              <textarea
-                className="textarea"
-                rows={Math.min(6, Math.max(2, text.split('\n').length))}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-                placeholder={t('tutor.placeholder')}
-                aria-label={t('tutor.placeholder')}
-              />
-              {chat.busy ? (
-                <button type="button" className="send-btn stop" onClick={A.stopTutor} aria-label={t('tutor.stop')} title={t('tutor.stop')}>
-                  <Icon name="stop" />
-                </button>
-              ) : (
-                <button type="submit" className="send-btn" disabled={!text.trim()} aria-label={t('tutor.send')} title={t('tutor.send')}>
-                  <Icon name="arrowUp" />
-                </button>
-              )}
+            <div className="composer-box with-chips" data-tour="composer">
+              <ContextChips />
+              <div className="composer-line">
+                <textarea
+                  ref={inputRef}
+                  className="textarea"
+                  rows={Math.min(6, Math.max(2, text.split('\n').length))}
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  placeholder={t('tutor.placeholder')}
+                  aria-label={t('tutor.placeholder')}
+                />
+                {chat.busy && !(pendingOnly && text.trim()) ? (
+                  <button type="button" className="send-btn stop" onClick={A.stopTutor} aria-label={t('tutor.stop')} title={t('tutor.stop')}>
+                    <Icon name="stop" />
+                  </button>
+                ) : (
+                  <button type="submit" className="send-btn" disabled={!text.trim()} aria-label={t('tutor.send')} title={t('tutor.send')}>
+                    <Icon name="arrowUp" />
+                  </button>
+                )}
+              </div>
             </div>
             <div className="composer-row">
-              <button type="button" className="ctx-toggle" aria-pressed={settings.sendContext} onClick={() => A.updateSettings({ sendContext: !settings.sendContext })}>
-                <span className="box" />
-                {settings.sendContext && activeTab ? t('tutor.context', { file: activeTab }) : t('tutor.contextOff')}
-              </button>
               <span className="composer-model">{model ? model.label.replace('Claude ', '') : ''}</span>
             </div>
           </form>

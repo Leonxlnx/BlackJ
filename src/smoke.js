@@ -147,10 +147,13 @@ export async function runSmoke() {
     await until(() => getState().compile.state === 'errors');
     const p = getState().compile.problems[0];
     if (!p || !p.message.includes("';' expected")) throw new Error(JSON.stringify(p));
+    await until(() => document.querySelector('.tb-state'), 3000, 'no state in the title bar');
+    if (document.querySelector('.tb-state').textContent.trim() !== '1 Fehler') throw new Error('tb-state: ' + document.querySelector('.tb-state').textContent);
     await shot('09-compile-error');
     A.editFile('Hund.java', f.content);
     await A.compile();
     await until(() => getState().compile.state === 'ok');
+    await until(() => !document.querySelector('.tb-state'), 3000, 'tb-state still shown');
   });
   await step('drag a class card, then arrange again', async () => {
     const card = [...document.querySelectorAll('.class-card')].find((el) => el.getAttribute('aria-label') === 'Zoo');
@@ -266,6 +269,88 @@ export async function runSmoke() {
     await until(() => document.querySelector('.diff-host .monaco-diff-editor'));
     await shot('12-diff');
     A.closeDialog();
+  });
+  // The tutor as an agent, against the scripted fake API (electron/smoke-ai.cjs): nothing leaves the machine.
+  let original = null;
+  await step('agent: reads a file and proposes an edit', async () => {
+    await A.compile();
+    await A.setApiKey('sk-ant-smoke', false);
+    A.setTutorMode('explain');
+    setState({ tutorOpen: true, side: 'tutor' });
+    A.openFile('Hund.java');
+    original = getState().files['Hund.java'].content;
+    A.askTutor('Lass den Hund zweimal bellen');
+    await until(() => document.querySelector('.agent-diff[data-status="pending"]'), 15000, 'no pending change card');
+    if (document.querySelectorAll('.agent-step').length < 1) throw new Error('no tool rows');
+    if (!document.querySelector('.proposal-bar')) throw new Error('no proposal bar in the editor');
+    // The chat card beside it has the buttons: one primary on screen, the bar only points at it.
+    if (!document.querySelector('.proposal-bar.quiet') || document.querySelector('.proposal-bar .btn-primary')) throw new Error('proposal bar has its own buttons next to the card');
+    const stat = document.querySelector('.agent-diff .stat').textContent.trim();
+    if (stat !== '+1 −1') throw new Error('stat ' + stat);
+    await shot('23-agent-diff');
+    document.querySelector('.agent-diff [data-act="accept"]').click();
+    await until(() => !getState().chat.busy, 20000, 'turn did not end');
+    if (!getState().files['Hund.java'].content.includes('"Wuff! Wuff!"')) throw new Error('change not applied');
+    const turn = getState().chat.turns[getState().chat.turns.length - 1];
+    if (!turn.parts.some((p) => p.type === 'tool' && p.name === 'compile' && p.status === 'done')) throw new Error('no compile step: ' + JSON.stringify(turn.parts.map((p) => [p.type, p.name, p.status])));
+    if (document.querySelector('.proposal-bar')) throw new Error('proposal bar still shown');
+    await shot('23b-agent-applied');
+    A.editFile('Hund.java', original);
+    await A.saveFile('Hund.java');
+    await A.compile();
+  });
+  // Both elements are there, and the ring goes around the target (3px of air at least).
+  const ringAround = (sel) => {
+    const ring = document.querySelector('.tour-ring');
+    const el = document.querySelector(sel);
+    if (!ring || !el) return false;
+    const a = ring.getBoundingClientRect();
+    const b = el.getBoundingClientRect();
+    return a.left <= b.left - 3 && a.top <= b.top - 3 && a.right >= b.right + 3 && a.bottom >= b.bottom + 3;
+  };
+  const text = (sel) => (document.querySelector(sel) ? document.querySelector(sel).textContent.trim() : null);
+  await step('agent tutorial: ring on the compile button, then on a class card', async () => {
+    A.newChat();
+    A.editFile('Hund.java', original + '\n');
+    A.askTutor('Wie erzeuge ich ein Objekt?');
+    await until(() => document.querySelector('.tour-ring') && ringAround('[data-tour="compile"]'), 15000, 'no ring on compile');
+    const callout = document.querySelector('.tour-callout').getBoundingClientRect();
+    const target = document.querySelector('[data-tour="compile"]').getBoundingClientRect();
+    if (callout.left < target.right && callout.right > target.left && callout.top < target.bottom && callout.bottom > target.top) throw new Error('callout covers the button');
+    if (text('.tour-tag') !== 'Hier klicken') throw new Error('tag ' + text('.tour-tag'));
+    if (text('.tour-count') !== '1 von 3') throw new Error('count ' + text('.tour-count'));
+    await until(() => !getState().chat.busy, 15000, 'turn did not end');
+    await shot('24-tour-compile');
+    await A.compile();
+    await until(() => ringAround('[data-tour="class:Hund"]'), 8000, 'no ring on Hund');
+    if (text('.tour-count') !== '2 von 3') throw new Error('count ' + text('.tour-count'));
+    if (text('.tour-tag') !== 'Rechtsklick') throw new Error('tag ' + text('.tour-tag'));
+    await shot('24b-tour-class');
+    const card = document.querySelector('[data-tour="class:Hund"]');
+    const r = card.getBoundingClientRect();
+    card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.left + 20, clientY: r.top + 20 }));
+    await until(() => ringAround('[data-tour="menu:new"]'), 8000, 'no ring on the constructor');
+    if (document.querySelector('.tour-tag')) throw new Error('tag over the menu: ' + text('.tour-tag'));
+    if (!document.querySelector('.tour-ring.dim')) throw new Error('menu step lost the dim');
+    await shot('24c-tour-menu');
+    A.closeMenu();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await until(() => !document.querySelector('.tour-ring'), 3000, 'ring still shown');
+    const summary = [...document.querySelectorAll('.agent-step')].map((el) => el.textContent).join(' | ');
+    // Closed on its last step: seen through, one short line with the replay link.
+    if (!summary.includes('Gezeigt') || !summary.includes('Nochmal zeigen') || summary.includes('beendet')) throw new Error('rows: ' + summary);
+    await A.updateSettings({ theme: 'light' });
+    A.pointAt({ target: 'new-class', text: 'Hier legst du eine neue Klasse an.' });
+    await until(() => ringAround('[data-tour="new-class"]'), 4000, 'no ring on new class');
+    await shot('24d-point-light');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await until(() => !document.querySelector('.tour-ring'), 3000, 'point still shown');
+    await A.updateSettings({ theme: 'dark' });
+    A.editFile('Hund.java', original);
+    await A.saveFile('Hund.java');
+    await A.compile();
+    A.setTutorMode('hints');
+    await A.forgetApiKey();
   });
   await step('packages and README (Bibliothek)', async () => {
     await A.openExample('Bibliothek');
@@ -415,6 +500,164 @@ export async function runSmoke() {
     await A.createObject('Hund', hund.constructors[0], [{ kind: 'text', text: 'Bello' }, { kind: 'text', text: '3' }], 'bello');
     await shot('19-light');
     await A.updateSettings({ theme: 'dark' });
+  });
+  await step('workspace without status bar', async () => {
+    if (document.querySelector('.statusbar')) throw new Error('status bar still there');
+    const bottom = Math.round(document.querySelector('.app-main').getBoundingClientRect().bottom);
+    if (bottom !== window.innerHeight) throw new Error(`stage ends at ${bottom}, window ${window.innerHeight}`);
+    await shot('25-ws-dark-1440');
+    await A.updateSettings({ theme: 'light' });
+    await shot('25b-ws-light-1440');
+    await api.smoke.resize({ width: 1280, height: 720 });
+    await shot('25c-ws-light-1280');
+    await A.updateSettings({ theme: 'dark' });
+    await shot('25d-ws-dark-1280');
+    await api.smoke.resize({ width: 1440, height: 860 });
+  });
+  // The workspace as an IDE: every splitter resizes, panels move by their head, the editor pops out.
+  const hostRect = (p) => document.querySelector(`.ws-host[data-panel="${p}"]`).getBoundingClientRect();
+  const pointer = (el, type, x, y) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, screenX: x, screenY: y, button: 0, buttons: type === 'pointerup' ? 0 : 1, pointerId: 7, isPrimary: true }));
+  const layoutKey = () => 'blackj.layout:' + getState().project.dir.toLowerCase();
+  const findSplit = (n, id) => (n.panel ? null : n.id === id ? n : n.children.map((c) => findSplit(c, id)).find(Boolean) || null);
+  await step('splitters: drag, keyboard and double-click resize every panel, per project', async () => {
+    A.go('project');
+    setState({ tutorOpen: true, side: 'tutor', dockCollapsed: false });
+    await until(() => document.querySelectorAll('.splitter').length === 3, 4000, 'splitters: ' + document.querySelectorAll('.splitter').length);
+    // [split, panel whose size changes, axis, pointer movement, expected growth of that panel]
+    for (const [split, panel, axis, d, grow] of [['top', 'diagram', 'width', 60, 60], ['root', 'side', 'width', -50, 50], ['main', 'dock', 'height', -40, 40]]) {
+      const el = document.querySelector(`.splitter[data-split="${split}"]`);
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      const across = axis === 'width';
+      const before = hostRect(panel)[axis];
+      pointer(el, 'pointerdown', x, y);
+      for (let i = 1; i <= 5; i++) pointer(window, 'pointermove', x + (across ? (d * i) / 5 : 0), y + (across ? 0 : (d * i) / 5));
+      pointer(window, 'pointerup', x + (across ? d : 0), y + (across ? 0 : d));
+      await wait(80);
+      const after = hostRect(panel)[axis];
+      if (Math.abs(after - before - grow) > 3) throw new Error(`${split}: ${panel} ${axis} ${Math.round(before)} -> ${Math.round(after)}, want +${grow}`);
+    }
+    const stored = JSON.parse(localStorage.getItem(layoutKey()));
+    if (JSON.stringify(stored) !== JSON.stringify(getState().layout.tree)) throw new Error('layout not stored');
+    const top = document.querySelector('.splitter[data-split="top"]');
+    const w0 = hostRect('diagram').width;
+    top.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    await wait(50);
+    if (Math.abs(hostRect('diagram').width - w0 - 16) > 3) throw new Error('arrow key: ' + (hostRect('diagram').width - w0));
+    top.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    await wait(50);
+    const sizes = findSplit(getState().layout.tree, 'top').sizes.map((s) => Math.round(s * 100));
+    if (sizes.join() !== '42,58') throw new Error('double-click reset: ' + sizes);
+    const el = document.querySelector('.splitter[data-split="main"]');
+    el.classList.add('dragging');
+    await shot('26-splitter');
+    el.classList.remove('dragging');
+  });
+  await step('drag a panel by its head: preview, drop, settles, stays after reopening, reset', async () => {
+    const grow = document.querySelector('.ws-host[data-panel="dock"] .panel-head .grow');
+    const g = grow.getBoundingClientRect();
+    const x0 = g.left + g.width / 2;
+    const y0 = g.top + g.height / 2;
+    const ed = hostRect('editor');
+    const tx = ed.right - 40;
+    const ty = ed.top + ed.height / 2;
+    pointer(grow, 'pointerdown', x0, y0);
+    for (let i = 1; i <= 8; i++) pointer(window, 'pointermove', x0 + ((tx - x0) * i) / 8, y0 + ((ty - y0) * i) / 8);
+    await until(() => document.querySelector('.ws-drop.on'), 2000, 'no drop preview');
+    await wait(200);
+    const pv = document.querySelector('.ws-drop').getBoundingClientRect();
+    if (Math.abs(pv.right - (ed.right - 6)) > 3 || Math.abs(pv.width - (ed.width / 2 - 12)) > 3) throw new Error('preview ' + JSON.stringify(pv));
+    await shot('27-drop-preview');
+    pointer(window, 'pointerup', tx, ty);
+    await wait(300);
+    const moved = () => {
+      const d = hostRect('dock');
+      const e = hostRect('editor');
+      return d.left > e.right - 2 && Math.abs(d.top - e.top) < 3;
+    };
+    if (!moved()) throw new Error('dock not right of the editor: ' + JSON.stringify([hostRect('dock'), hostRect('editor')]));
+    if (!document.querySelector('.ws-drop:not(.on)') || document.querySelector('.ws-ghost.on')) throw new Error('preview still shown');
+    await shot('28-dock-moved');
+    const dir = getState().project.dir;
+    await A.openPath(dir);
+    await until(() => document.querySelector('.ws-host[data-panel="dock"] .panel-head'), 8000, 'project not reopened');
+    await wait(150);
+    if (!moved()) throw new Error('layout not kept for the project');
+    A.resetLayout();
+    await wait(100);
+    if (!(hostRect('dock').top > hostRect('editor').bottom)) throw new Error('reset did not put the dock back');
+    if (JSON.stringify(JSON.parse(localStorage.getItem(layoutKey()))) !== JSON.stringify(getState().layout.tree)) throw new Error('reset not stored');
+  });
+  await step('editor in its own window: edits both ways, breakpoints and theme follow, closing docks it back', async () => {
+    const untilAsync = async (fn, ms, what) => {
+      const start = Date.now();
+      while (!(await fn())) {
+        if (Date.now() - start > ms) throw new Error('timeout: ' + what);
+        await wait(100);
+      }
+    };
+    const ev = (code) => api.smoke.panelEval({ panel: 'editor', code });
+    A.openFile('Zoo.java');
+    const before = getState().files['Zoo.java'].content;
+    const diagramW = hostRect('diagram').width;
+    A.popOut('editor');
+    await until(() => !document.querySelector('.editor-panel'), 3000, 'editor still in the main window');
+    if (hostRect('diagram').width <= diagramW + 100) throw new Error('main window did not reflow');
+    await untilAsync(() => ev('!!(window.blackjSmoke && window.blackjSmoke.editor() && document.querySelector(".editor-host .view-line"))'), 20000, 'pop-out editor not ready');
+    await ev(`(() => { const ed = window.blackjSmoke.editor(); ed.focus(); ed.setPosition({ lineNumber: 1, column: 1 }); ed.trigger('smoke', 'type', { text: '// aus dem Fenster\\n' }); return true; })()`);
+    await until(() => getState().files['Zoo.java'].content.startsWith('// aus dem Fenster\n'), 5000, 'edit did not reach the main window');
+    if (!A.isDirty(getState().files['Zoo.java'])) throw new Error('edit not marked unsaved');
+    A.editFile('Zoo.java', before);
+    await untilAsync(async () => (await ev('window.blackjSmoke.editor().getValue()')) === before, 5000, 'change from the main window not in the pop-out');
+    const line = before.split('\n').findIndex((l) => l.includes('Scanner eingabe')) + 1;
+    A.toggleBreakpoint('Zoo.java', line);
+    await untilAsync(async () => (await ev('document.querySelectorAll(".bp-glyph").length')) === 1, 5000, 'breakpoint not shown in the pop-out');
+    await A.updateSettings({ theme: 'light' });
+    await untilAsync(async () => (await ev('document.documentElement.dataset.theme')) === 'light', 5000, 'theme not followed');
+    await wait(400);
+    await api.smoke.capture({ name: '29-popout-light', panel: 'editor' });
+    await A.updateSettings({ theme: 'dark' });
+    await untilAsync(async () => (await ev('document.documentElement.dataset.theme')) === 'dark', 5000, 'theme not followed back');
+    await wait(400);
+    await api.smoke.capture({ name: '29b-popout-dark', panel: 'editor' });
+    await shot('30-main-without-editor');
+    A.toggleBreakpoint('Zoo.java', line);
+    await ev('window.close()');
+    await until(() => document.querySelector('.editor-panel') && !getState().layout.detached.length, 5000, 'editor not docked back');
+    await A.saveFile('Zoo.java');
+    await shot('31-editor-docked-back');
+  });
+  await step('dock and side panel in their own windows: tabs switch the main state, the view menu docks them back', async () => {
+    const untilAsync = async (fn, ms, what) => {
+      const start = Date.now();
+      while (!(await fn())) {
+        if (Date.now() - start > ms) throw new Error('timeout: ' + what);
+        await wait(100);
+      }
+    };
+    setState({ dock: 'objects' });
+    A.popOut('dock');
+    A.popOut('side');
+    await until(() => !document.querySelector('.dock-panel') && !document.querySelector('.panel.side'), 3000, 'panels still in the main window');
+    const ev = (panel, code) => api.smoke.panelEval({ panel, code });
+    await untilAsync(async () => (await ev('dock', 'document.querySelectorAll(".dock-panel .tab").length')) >= 6, 15000, 'dock pop-out not ready');
+    await untilAsync(async () => !!(await ev('side', '!!document.querySelector(".panel.side .tab")')), 15000, 'side pop-out not ready');
+    await ev('dock', '!!document.querySelector(\'[data-tour="dock:console"]\')?.click() || true');
+    await until(() => getState().dock === 'console', 5000, 'dock tab did not reach the main window');
+    await ev('side', 'document.querySelector(\'[data-tour="side-tab:inspect"]\').click(), true');
+    await until(() => getState().side === 'inspect', 5000, 'side tab did not reach the main window');
+    A.note('Hallo aus dem Hauptfenster');
+    await untilAsync(async () => !!(await ev('dock', '(document.querySelector(".console") || { textContent: "" }).textContent.includes("Hallo aus dem Hauptfenster")')), 5000, 'console not mirrored');
+    await wait(300);
+    await api.smoke.capture({ name: '32-popout-dock', panel: 'dock' });
+    await shot('33-main-only-diagram-editor');
+    document.querySelector('.tb-view').click();
+    await until(() => [...document.querySelectorAll('.menu .menu-item')].some((el) => el.textContent.includes('Layout zurücksetzen')), 3000, 'no view menu');
+    await shot('34-view-menu');
+    [...document.querySelectorAll('.menu .menu-item')].find((el) => el.textContent.includes('Layout zurücksetzen')).click();
+    await until(() => document.querySelector('.dock-panel') && document.querySelector('.panel.side') && !getState().layout.detached.length, 5000, 'panels not docked back');
+    setState({ dock: 'objects', side: 'tutor' });
   });
   await step('english', async () => {
     await A.updateSettings({ lang: 'en' });

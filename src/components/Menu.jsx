@@ -63,6 +63,7 @@ export default function Menu() {
             key={i}
             className={'menu-item' + (it.danger ? ' danger' : '')}
             role="menuitem"
+            data-tour={it.tour ? 'menu:' + it.tour : undefined}
             disabled={it.disabled}
             onClick={() => {
               A.closeMenu();

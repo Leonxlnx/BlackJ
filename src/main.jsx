@@ -8,7 +8,9 @@ async function boot() {
     const { createMock } = await import('./mock.js');
     window.blackj = createMock();
   }
-  const [{ createRoot }, { default: App }] = await Promise.all([import('react-dom/client'), import('./App.jsx')]);
+  // A pop-out window (?panel=editor) shows one panel of the main window.
+  const panel = new URLSearchParams(window.location.search).get('panel');
+  const [{ createRoot }, { default: App }] = await Promise.all([import('react-dom/client'), panel ? import('./components/PanelApp.jsx') : import('./App.jsx')]);
   createRoot(document.getElementById('root')).render(<App />);
 }
 
