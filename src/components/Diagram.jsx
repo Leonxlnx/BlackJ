@@ -177,10 +177,17 @@ async function classMenu(cls, x, y, t) {
         items.push({ tour: 'static:' + m.name, label: <span className="sig"><span className="ret">static {m.returnType} </span>{m.name}({m.params.map((p) => `${p.type} ${p.name}`).join(', ')})</span>, onClick: () => A.openDialogBox({ type: 'call', kind: 'static', cls, method: m }) });
       }
       items.push({ type: 'sep' });
-      if (info && info.hasMain) items.push({ label: t('menu.runMain'), tour: 'runMain', icon: 'play', onClick: () => A.runMain(cls) });
+      if (info && info.hasMain) {
+        items.push({ label: t('menu.runMain'), tour: 'runMain', icon: 'play', onClick: () => A.runMain(cls) });
+        items.push({ label: t('menu.runMainArgs'), tour: 'runMainArgs', icon: 'play', onClick: () => A.openDialogBox({ type: 'call', kind: 'main', cls, method: { key: 'main', name: 'main', static: true, returnType: 'void', params: [{ name: 'args', type: 'String[]', category: 'array' }] } }) });
+      }
       if (info && info.isTest) {
         items.push({ label: t('menu.runTests'), tour: 'runTests', icon: 'check', onClick: () => A.runTests({ className: cls }) });
         items.push({ label: t('menu.record'), tour: 'record', icon: 'record', onClick: () => A.openDialogBox({ type: 'record', cls }) });
+      }
+      if (info && info.isTest && !s.project.readOnly) {
+        items.push({ label: t('fixture.toBench'), tour: 'fixtureToBench', icon: 'insert', onClick: () => A.fixtureToBench(cls) });
+        items.push({ label: t('fixture.fromBench'), tour: 'benchToFixture', icon: 'save', disabled: !s.bench.objects.length, onClick: () => A.benchToFixture(cls) });
       }
       items.push({ label: t('menu.inspectClass'), tour: 'inspectClass', icon: 'eye', onClick: () => A.showInspector(cls, simple, true) });
     }
@@ -194,6 +201,11 @@ async function classMenu(cls, x, y, t) {
   if (!s.settings.aiOff) items.push({ label: t('menu.explain'), tour: 'explain', icon: 'tutor', onClick: () => { A.openClass(cls); setTimeout(() => A.askTutor(t('tutor.prompt.explainClass', { name: simple })), 50); } });
   if (!s.project.readOnly) {
     items.push({ type: 'sep' });
+    const model = A.modelOf(s.files);
+    for (const p of (info && info.parents) || []) {
+      const parent = model.byName[p];
+      if (parent) items.push({ label: t('relation.remove', { rel: parent.kind === 'interface' && info.kind !== 'interface' ? 'implements' : 'extends', name: parent.simple }), icon: 'close', onClick: () => A.removeRelation(cls, p) });
+    }
     items.push({ label: t('menu.delete'), tour: 'delete', icon: 'trash', danger: true, onClick: () => A.openDialogBox({ type: 'delete', cls }) });
   }
   A.openMenu({ x, y, items });
@@ -236,6 +248,15 @@ export default function Diagram({ model }) {
   // The width (in diagram units) the flow layout packs into and its row gap, set by fit().
   const [flowAt, setFlowAt] = useState(null);
   const [compact, setCompact] = useState(false);
+  // BlueJ's "inherits" arrow: pick the subclass, then the superclass or interface.
+  const [linking, setLinking] = useState(null);
+  const [linkAt, setLinkAt] = useState(null);
+  useEffect(() => {
+    if (!linking) return undefined;
+    const key = (e) => e.key === 'Escape' && setLinking(null);
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [linking]);
   // Card sizes with their member lists, kept while compact hides them.
   const fullSizes = useRef({});
   const fitted = useRef(null);
@@ -374,7 +395,10 @@ export default function Diagram({ model }) {
   }, []);
 
   /** Saves the whole diagram as a PNG, e.g. for a project report: fitted, without the zoom tools. */
-  const exportImage = async () => {
+  const exportImage = () => captureDiagram((rect) => A.saveDiagramImage(rect));
+  const printDiagram = () => captureDiagram((rect) => A.printDiagram(rect));
+  /** Fits the whole diagram into the panel for a moment and hands its screen rectangle to `use`. */
+  const captureDiagram = async (use) => {
     const host = hostRef.current;
     if (!host || !keys.length) return;
     const before = view;
@@ -399,7 +423,7 @@ export default function Diagram({ model }) {
         }
       : { left: b.left, top: b.top, right: b.right, bottom: b.bottom };
     try {
-      await A.saveDiagramImage({ x: box.left, y: box.top, width: box.right - box.left, height: box.bottom - box.top });
+      await use({ x: box.left, y: box.top, width: box.right - box.left, height: box.bottom - box.top });
     } finally {
       host.classList.remove('exporting');
       setView(before);
@@ -568,8 +592,24 @@ export default function Diagram({ model }) {
     });
   };
 
+  const pickForLink = (cls) => {
+    if (!linking.from) {
+      setLinking({ from: cls });
+      return;
+    }
+    if (cls !== linking.from) A.addRelation(linking.from, cls);
+    setLinking(null);
+    setLinkAt(null);
+  };
+  const trackLink = (e) => {
+    if (!linking || !linking.from) return;
+    const host = hostRef.current.getBoundingClientRect();
+    setLinkAt({ x: (e.clientX - host.left - view.x) / view.k, y: (e.clientY - host.top - view.y) / view.k });
+  };
+
   const startPan = (e) => {
     if (e.button !== 0 || e.target.closest('.dcard') || e.target.closest('button')) return;
+    if (linking) setLinking(null);
     setState({ selectedClass: null });
     setPanning(true);
     let lx = e.clientX;
@@ -635,6 +675,9 @@ export default function Diagram({ model }) {
             <button className="icon-btn" data-tour="new-package" aria-label={t('diagram.newPackage')} title={t('diagram.newPackage')} onClick={() => A.openDialogBox({ type: 'newPackage' })}>
               <Icon name="folderPlus" />
             </button>
+            <button className="icon-btn" data-tour="new-arrow" aria-pressed={!!linking} aria-label={t('relation.draw')} title={t('relation.draw')} disabled={classes.length < 2} onClick={() => { setLinking(linking ? null : { from: null }); setLinkAt(null); }}>
+              <Icon name="inherit" />
+            </button>
           </>
         )}
         <button className="icon-btn" aria-pressed={details} aria-label={t('diagram.details')} title={t('diagram.details')} onClick={() => A.updateSettings({ diagramDetails: !details })}>
@@ -663,6 +706,7 @@ export default function Diagram({ model }) {
                 { label: t('lib.title'), icon: 'book', onClick: () => A.openDialogBox({ type: 'library' }) },
                 { type: 'sep' },
                 { label: t('diagram.saveImage'), icon: 'image', disabled: !keys.length, onClick: exportImage },
+                { label: t('print.diagram'), icon: 'printer', disabled: !keys.length, onClick: printDiagram },
                 { label: t('javadoc.title'), icon: 'book', disabled: !model.list.length, onClick: A.generateJavadoc },
                 { type: 'sep' },
                 { label: t('saveAs.title'), icon: 'save', onClick: () => A.saveProjectAs() },
@@ -677,7 +721,7 @@ export default function Diagram({ model }) {
           <Icon name="more" />
         </button>
       </div>
-      <div className={'diagram' + (panning ? ' panning' : '') + (compact ? ' compact' : '')} data-tour="diagram" ref={hostRef} onPointerDown={startPan} onWheel={onWheel} style={{ backgroundSize: `${gridStep}px ${gridStep}px`, backgroundPosition: `${view.x}px ${view.y}px` }}>
+      <div className={'diagram' + (panning ? ' panning' : '') + (compact ? ' compact' : '') + (linking ? ' linking' : '')} data-tour="diagram" ref={hostRef} onPointerDown={startPan} onPointerMove={trackLink} onWheel={onWheel} style={{ backgroundSize: `${gridStep}px ${gridStep}px`, backgroundPosition: `${view.x}px ${view.y}px` }}>
         {keys.length === 0 && !pkg ? (
           <div className="diagram-empty">
             <span>{t('diagram.empty')}</span>
@@ -702,6 +746,9 @@ export default function Diagram({ model }) {
               {[...trees.entries()].map(([id, tr]) => (
                 <InheritTree key={id} parent={rects[tr.parent]} kids={tr.kids} kind={tr.kind} hl={highlight === tr.parent} />
               ))}
+              {linking && linking.from && linkAt && rects[linking.from] && (
+                <path className="link-preview" d={`M${rects[linking.from].x + rects[linking.from].w / 2},${rects[linking.from].y + rects[linking.from].h / 2}L${linkAt.x},${linkAt.y}`} />
+              )}
             </svg>
 
             {readme && !pkg && (
@@ -757,10 +804,15 @@ export default function Diagram({ model }) {
                 <div
                   key={cls}
                   ref={(el) => { cardRefs.current[cls] = el; }}
-                  className={['dcard', 'class-card', info.kind, info.isTest ? 'test' : '', stale ? 'uncompiled' : '', selected === cls ? 'selected' : '', highlight === cls ? 'hl' : '', dragging === cls ? 'dragging' : ''].join(' ')}
+                  className={['dcard', 'class-card', info.kind, info.isTest ? 'test' : '', stale ? 'uncompiled' : '', selected === cls || (linking && linking.from === cls) ? 'selected' : '', highlight === cls ? 'hl' : '', dragging === cls ? 'dragging' : ''].join(' ')}
                   data-tour={'class:' + cls}
                   style={{ left: p.x, top: p.y }}
-                  onPointerDown={(e) => startDrag(e, cls, () => setState({ selectedClass: cls }))}
+                  onPointerDown={(e) => {
+                    if (!linking) return startDrag(e, cls, () => setState({ selectedClass: cls }));
+                    if (e.button !== 0) return undefined;
+                    e.stopPropagation();
+                    return pickForLink(cls);
+                  }}
                   onDoubleClick={() => A.openClass(cls)}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -828,6 +880,12 @@ export default function Diagram({ model }) {
                 </div>
               );
             })}
+          </div>
+        )}
+        {linking && (
+          <div className="link-hint" role="status">
+            <span>{linking.from ? t('relation.pickTo', { name: simpleName(linking.from) }) : t('relation.pickFrom')}</span>
+            <button className="link" onPointerDown={(e) => e.stopPropagation()} onClick={() => setLinking(null)}>{t('common.cancel')}</button>
           </div>
         )}
         <div className="diagram-tools" data-tour="zoom">

@@ -64,6 +64,10 @@ export function createMock() {
     setSettings: (patch) => { settings = { ...settings, ...patch }; return Promise.resolve(settings); },
     chooseJdk: () => Promise.resolve({ ok: false, error: { code: 'canceled' } }),
     autoJdk: () => Promise.resolve({}),
+  installJdk: () => Promise.resolve({ ok: false, error: { code: 'jdkUnsupported' } }),
+  onJdkProgress: () => () => {},
+  saveText: () => Promise.resolve({ ok: false, error: { code: 'canceled' } }),
+  print: { source: () => Promise.resolve({ ok: true, result: {} }), diagram: () => Promise.resolve({ ok: true, result: {} }) },
     project: {
       openDialog: () => ok(project('Tiere')),
       open: (dir) => ok(project(dir.split('\\').pop())),

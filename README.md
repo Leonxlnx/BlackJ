@@ -51,7 +51,11 @@
 - Code Pad: Java eintippen, Wert sehen, Variablen bleiben erhalten
 - Konsole mit Eingabe (`Scanner`), `main` starten, Programm stoppen
 - Debugger: Haltepunkte, Schritt / Hinein / Heraus, Aufrufstapel und Variablen
-- JUnit 4 und 5: Tests ausführen, Ergebnis je Test, **Testmethode aufzeichnen** wie in BlueJ
+- JUnit 4 und 5: Tests ausführen, Ergebnis je Test, **Testmethode aufzeichnen** wie in BlueJ, Testfixture von der Objektbank speichern und wieder auf die Objektbank holen
+- Vererbungspfeile im Diagramm ziehen (schreibt `extends` / `implements`) und wieder entfernen
+- `main` mit Argumenten starten, laufendes Programm im Debugger anhalten
+- Quelltext und Klassendiagramm drucken, Konsole als Textdatei speichern
+- Kein Java auf dem PC? „Java einrichten“ lädt Eclipse Temurin 21 (das JDK, das auch BlueJ mitbringt)
 - Quelltext / Dokumentation umschalten (aus den Javadoc-Kommentaren), farbige Blöcke (Scope-Highlighting)
 - Als JAR exportieren, Projekte als **ZIP öffnen und als ZIP abgeben** (ohne `.class`-Dateien), Projekt speichern unter
 - Projektdokumentation mit Javadoc erzeugen, Klasse aus Datei hinzufügen (die `package`-Zeile wird angepasst)

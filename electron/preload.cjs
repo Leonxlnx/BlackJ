@@ -13,6 +13,13 @@ contextBridge.exposeInMainWorld('blackj', {
   setSettings: invoke('settings:set'),
   chooseJdk: invoke('jdk:choose'),
   autoJdk: invoke('jdk:auto'),
+  installJdk: invoke('jdk:install'),
+  onJdkProgress: listen('jdk:progress'),
+  saveText: invoke('file:saveText'),
+  print: {
+    source: invoke('print:source'),
+    diagram: invoke('print:diagram'),
+  },
   project: {
     openDialog: invoke('project:openDialog'),
     open: invoke('project:open'),

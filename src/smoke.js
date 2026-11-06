@@ -664,6 +664,101 @@ export async function runSmoke() {
     await shot('20-english');
     await A.updateSettings({ lang: 'de' });
   });
+  // What BlueJ has and BlackJ added late: test fixture, main(String[]) arguments, Halt, printing,
+  // saving the terminal, and drawing inheritance arrows in the diagram.
+  const card = (c) => document.querySelector(`[data-tour="class:${c}"]`);
+  const firePointer = (type, el, dx = 20, dy = 20) => {
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new PointerEvent(type, { bubbles: true, button: 0, clientX: r.left + dx, clientY: r.top + dy }));
+  };
+  await step('test fixture: object bench to setUp() and back', async () => {
+    await A.openExample('Bankkonto');
+    await until(() => document.querySelectorAll('.class-card').length === 2);
+    await A.compile();
+    await until(() => getState().compile.state === 'ok' && getState().bench.state === 'ready');
+    const konto = await A.describe('Konto');
+    await A.createObject('Konto', konto.constructors[0], [{ kind: 'text', text: 'Mia' }], 'mia');
+    await A.callMethod({ target: 'mia', cls: 'Konto', method: method(konto, 'einzahlen'), args: [{ kind: 'text', text: '50' }] });
+    await A.createObject('Konto', konto.constructors[0], [{ kind: 'text', text: 'Tom' }], 'tom');
+    await A.removeObject('tom');
+    card('KontoTest').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: card('KontoTest').getBoundingClientRect().left + 20, clientY: card('KontoTest').getBoundingClientRect().top + 20 }));
+    await until(() => [...document.querySelectorAll('.menu .menu-item')].some((el) => el.textContent.includes('Testfixture')), 5000, 'fixture menu');
+    await shot('35-fixture-menu');
+    A.closeMenu();
+    await A.benchToFixture('KontoTest');
+    const src = getState().files['KontoTest.java'].content;
+    if (!/private Konto mia;/.test(src) || !/@BeforeEach\s+public void setUp\(\) \{\s+mia = new Konto\("Mia"\);\s+mia\.einzahlen\(50(\.0)?\);\s+\}/.test(src) || /tom/.test(src) || !/import org\.junit\.jupiter\.api\.BeforeEach;/.test(src)) throw new Error('fixture source:\n' + src);
+    await A.compile();
+    await until(() => getState().compile.state === 'ok' && getState().bench.state === 'ready' && !getState().bench.objects.length, 15000, 'bench restarted');
+    await A.fixtureToBench('KontoTest');
+    await until(() => getState().bench.objects.some((o) => o.name === 'mia'), 5000, 'fixture objects');
+    const back = await A.callMethod({ target: 'mia', cls: 'Konto', method: method(konto, 'getKontostand'), args: [], quiet: true });
+    if (back.result.value.text !== '50.0') throw new Error('kontostand ' + JSON.stringify(back.result.value));
+  });
+  await step('main with arguments, pause a running program, save the console, print', async () => {
+    const err = await A.newClass('Echo', 'main');
+    if (err) throw new Error(err);
+    A.editFile('Echo.java', 'public class Echo {\n    public static void main(String[] args) {\n        long n = 0;\n        while (args.length == 0) {\n            n++;\n        }\n        System.out.println("args=" + String.join("|", args));\n    }\n}\n');
+    await A.saveFile('Echo.java');
+    await A.compile();
+    await until(() => getState().compile.state === 'ok' && getState().bench.state === 'ready');
+    const main = { key: 'main', name: 'main', static: true, returnType: 'void', params: [{ name: 'args', type: 'String[]', category: 'array' }] };
+    A.openDialogBox({ type: 'call', kind: 'main', cls: 'Echo', method: main });
+    await until(() => document.querySelector('[data-tour="dialog:arg:0"] input'));
+    const input = document.querySelector('[data-tour="dialog:arg:0"] input');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'Anna, "3 4"');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await until(() => document.querySelector('.dialog .statement').textContent.includes('new String[]{"Anna", "3 4"}'), 3000, 'statement ' + document.querySelector('.dialog .statement').textContent);
+    await shot('36-main-args');
+    document.querySelector('[data-tour="dialog:confirm"]').click();
+    await until(() => getState().console.some((l) => l.text.includes('args=Anna|3 4')), 15000, 'main args');
+    const run = A.runMain('Echo');
+    await until(() => getState().bench.state === 'running');
+    setState({ dock: 'debug' });
+    await until(() => document.querySelector('[data-tour="debug:pause"]'));
+    await shot('37-running');
+    document.querySelector('[data-tour="debug:pause"]').click();
+    await until(() => getState().debug.paused, 15000, 'paused');
+    if (!getState().debug.paused.frames.some((f) => f.className === 'Echo')) throw new Error(JSON.stringify(getState().debug.paused.frames));
+    await shot('37b-paused');
+    await A.stopProgram();
+    await run;
+    setState({ dock: 'console' });
+    await A.saveConsole();
+    if (!getState().toast || !getState().toast.text.includes('console.txt')) throw new Error('console save ' + JSON.stringify(getState().toast));
+    const pr = await api.print.source({ title: 'Echo.java', text: 'a < b' });
+    const b = document.querySelector('.diagram').getBoundingClientRect();
+    const pd = await api.print.diagram({ rect: { x: b.left, y: b.top, width: b.width, height: b.height }, title: 'Bankkonto' });
+    if (!pr.ok || !pd.ok) throw new Error(JSON.stringify([pr, pd]));
+  });
+  await step('draw and remove inheritance arrows in the diagram', async () => {
+    for (const [n, k] of [['Sparkonto', 'class'], ['Verzinsbar', 'interface']]) {
+      const err = await A.newClass(n, k);
+      if (err) throw new Error(err);
+    }
+    await until(() => card('Sparkonto') && card('Verzinsbar'));
+    document.querySelector('[data-tour="new-arrow"]').click();
+    await until(() => document.querySelector('.link-hint'));
+    firePointer('pointerdown', card('Sparkonto'));
+    await until(() => document.querySelector('.link-hint').textContent.includes('Sparkonto'), 3000, 'source not picked');
+    const kr = card('Konto').getBoundingClientRect();
+    document.querySelector('.diagram').dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: kr.left + kr.width / 2, clientY: kr.bottom + 24 }));
+    await until(() => document.querySelector('.edges .link-preview'), 3000, 'rubber band');
+    await shot('38-draw-arrow');
+    firePointer('pointerdown', card('Konto'));
+    const content = () => getState().files['Sparkonto.java'].content;
+    await until(() => /class Sparkonto extends Konto \{/.test(content()), 5000, 'extends: ' + content().slice(0, 300));
+    await A.addRelation('Sparkonto', 'Verzinsbar');
+    if (!/class Sparkonto extends Konto implements Verzinsbar \{/.test(content())) throw new Error(content());
+    const before = getState().files['Konto.java'].content;
+    await A.addRelation('Konto', 'Sparkonto');
+    if (getState().files['Konto.java'].content !== before || getState().toast.kind !== 'bad') throw new Error('cycle was written');
+    await until(() => document.querySelectorAll('.edges path').length >= 2);
+    await shot('38b-arrows');
+    await A.removeRelation('Sparkonto', 'Konto');
+    await A.removeRelation('Sparkonto', 'Verzinsbar');
+    if (!/class Sparkonto \{/.test(content())) throw new Error(content());
+  });
   await step('home with recent projects', async () => {
     A.go('home');
     await until(() => document.querySelectorAll('.recent-tile').length >= 1);

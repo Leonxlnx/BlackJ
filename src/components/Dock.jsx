@@ -365,6 +365,7 @@ export default function Dock() {
             <span className="wide-only">{t('ws.reset')}</span>
           </button>
         )}
+        {dock === 'console' && consoleLines > 0 && <button className="btn btn-sm btn-quiet" onClick={A.saveConsole}>{t('console.save')}</button>}
         {dock === 'console' && consoleLines > 0 && <button className="btn btn-sm btn-quiet" onClick={A.clearConsole}>{t('console.clear')}</button>}
         {(benchState === 'running' || benchState === 'waiting') && dock !== 'debug' && (
           <button className="btn btn-sm" onClick={A.stopProgram}>

@@ -8,6 +8,18 @@ import { valueText } from './InspectorPanel.jsx';
 import Icon, { Select } from './Icon.jsx';
 
 const remembered = new Map();
+// Earlier values per parameter, newest first, offered as suggestions like BlueJ's call history.
+const pastValues = new Map();
+
+/** "a, "b c", d" -> ['a', 'b c', 'd']: main's arguments, commas inside quotes kept. */
+function splitArgs(text) {
+  const out = [];
+  const re = /\s*(?:"((?:[^"\\]|\\.)*)"|([^,]*?))\s*(?:,|$)/g;
+  const src = String(text || '').trim().replace(/^\{|\}$/g, '');
+  if (!src.trim()) return out;
+  for (let m; (m = re.exec(src)) && m[0];) out.push(m[1] != null ? m[1].replace(/\\(.)/g, '$1') : m[2]);
+  return out;
+}
 const simple = (type) => type.replace(/<.*>/, '').split('.').pop();
 
 function Dialog({ title, sub, wide, xwide, children, footer, onClose }) {
@@ -93,15 +105,26 @@ function CallDialog({ dialog }) {
   const shownArgs = args.map((a, i) => (a.kind === 'text' && !String(a.text ?? '').trim() ? { kind: 'ref', name: '\u0000' + i + '\u0000' } : a));
   const statementText = A.statementFor({ kind: kind === 'new' ? 'new' : 'call', cls, target, method, args: shownArgs, name });
   const statement = statementText.split(/\u0000(\d+)\u0000/).map((part, i) => (i % 2 ? <span key={i} className="ph">{paramLabel(method.params[Number(part)])}</span> : part));
-  const title = kind === 'new' ? t('call.title.new') : t('call.title.call');
-  const sub = kind === 'new' ? `new ${sname}(…)` : `${kind === 'static' ? sname : target}.${method.name}(…)`;
+  const title = kind === 'new' ? t('call.title.new') : kind === 'main' ? t('call.title.main') : t('call.title.call');
+  const sub = kind === 'new' ? `new ${sname}(…)` : `${kind === 'static' || kind === 'main' ? sname : target}.${method.name}(…)`;
 
   const submit = async (e) => {
     e && e.preventDefault();
     setBusy(true);
     setError(null);
     remembered.set(memoKey, args);
+    args.forEach((a, i) => {
+      const v = a.kind === 'text' ? String(a.text ?? '').trim() : '';
+      if (!v || method.params[i].category === 'boolean') return;
+      const k = memoKey + '|' + i;
+      pastValues.set(k, [v, ...(pastValues.get(k) || []).filter((x) => x !== v)].slice(0, 8));
+    });
     const self = getState().dialog;
+    if (kind === 'main') {
+      A.closeDialog();
+      A.runMain(cls, { args: splitArgs(args[0] && args[0].text) });
+      return;
+    }
     const r = kind === 'new' ? await A.createObject(cls, method, args, name) : await A.callMethod({ target, cls, method, args });
     setBusy(false);
     if (r.error) setError(r.error);
@@ -161,7 +184,14 @@ function CallDialog({ dialog }) {
               </Select>
             );
           } else {
-            control = <input className="input mono" value={a.text} onChange={(e) => setArg(i, { kind: 'text', text: e.target.value })} placeholder={t('call.hint.' + p.category)} spellCheck="false" />;
+            const past = pastValues.get(memoKey + '|' + i) || [];
+            const listId = past.length ? `past-${i}` : undefined;
+            control = (
+              <>
+                <input className="input mono" value={a.text} onChange={(e) => setArg(i, { kind: 'text', text: e.target.value })} placeholder={t(kind === 'main' ? 'call.hint.mainArgs' : 'call.hint.' + p.category)} spellCheck="false" list={listId} autoComplete="off" />
+                {listId && <datalist id={listId}>{past.map((v) => <option key={v} value={v} />)}</datalist>}
+              </>
+            );
           }
           const noMatch = p.category === 'object' && !objects.some((o) => fits(o, p.type));
           return (

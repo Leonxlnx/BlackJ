@@ -13,6 +13,15 @@ const MINI = {
   Bankkonto: { boxes: [['Konto', 'einzahlen()', 45, 0.5], ['KontoTest', '«Test»', 131, 0.5]], arrows: [] },
   Bibliothek: { boxes: [['medien', 'Buch, Film', 36, 0, 'pkg'], ['Bibliothek', 'aufnehmen()', 127, 0], ['Start', 'main()', 36, 1], ['BibliothekTest', '«Test»', 127, 1]], arrows: [] },
 };
+/** "Java einrichten": downloads a JDK into BlackJ's folder, with its progress in place of the button. */
+export function JdkInstall() {
+  const t = useT();
+  const job = useStore((s) => s.jdkInstall);
+  if (!job) return <button className="btn btn-sm btn-primary" data-tour="jdk-install" onClick={A.installJdk}><Icon name="download" />{t('jdk.install')}</button>;
+  const pct = job.phase === 'download' && job.total ? Math.round((job.received / job.total) * 100) : null;
+  return <span className="muted jdk-progress" role="status">{job.phase === 'unpack' ? t('jdk.unpack') : pct != null ? t('jdk.download', { pct }) : t('jdk.lookup')}</span>;
+}
+
 const ROW = (r) => 12 + r * 58;
 const BOX_H = 38;
 
@@ -193,7 +202,7 @@ export default function Home() {
           <div className="card home-alert">
             <span className="status-dot bad" />
             <span className="grow">{t('home.javaMissing')}</span>
-            <button className="btn btn-sm btn-primary" onClick={() => api.openExternal('https://adoptium.net/temurin/releases/')}>{t('home.javaGet')}</button>
+            <JdkInstall />
             <button className="btn btn-sm btn-quiet" onClick={() => A.go('settings')}>{t('home.javaPick')}</button>
           </div>
         )}

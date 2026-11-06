@@ -38,16 +38,21 @@ export default function DebugPanel() {
   const breakpoints = useStore((s) => s.breakpoints);
   const files = useStore((s) => s.files);
   const paused = debug && debug.paused;
+  const running = useStore((s) => s.bench.state === 'running' || s.bench.state === 'waiting');
   const count = Object.values(breakpoints || {}).reduce((n, l) => n + l.length, 0);
 
   return (
     <div className="debug">
       <div className="tests-bar">
-        <button className="btn btn-sm" data-tour="debug:resume" disabled={!paused} onClick={() => A.debugCommand('resume')} title="F8"><Icon name="play" />{t('debug.continue')}</button>
+        {!paused && running ? (
+          <button className="btn btn-sm" data-tour="debug:pause" onClick={() => A.debugCommand('pause')}><Icon name="pause" />{t('debug.pause')}</button>
+        ) : (
+          <button className="btn btn-sm" data-tour="debug:resume" disabled={!paused} onClick={() => A.debugCommand('resume')} title="F8"><Icon name="play" />{t('debug.continue')}</button>
+        )}
         <button className="btn btn-sm" data-tour="debug:stepOver" disabled={!paused} onClick={() => A.debugCommand('stepOver')} title="F10"><Icon name="stepOver" />{t('debug.over')}</button>
         <button className="btn btn-sm" data-tour="debug:stepInto" disabled={!paused} onClick={() => A.debugCommand('stepInto')} title="F11"><Icon name="stepInto" />{t('debug.into')}</button>
         <button className="btn btn-sm" data-tour="debug:stepOut" disabled={!paused} onClick={() => A.debugCommand('stepOut')} title={formatKeys(lang, 'shift F11', '+')}><Icon name="stepOut" />{t('debug.out')}</button>
-        <button className="btn btn-sm btn-quiet" disabled={!paused} onClick={A.stopProgram}><span className="stop-sq" aria-hidden="true" />{t('ws.stop')}</button>
+        <button className="btn btn-sm btn-quiet" disabled={!paused && !running} onClick={A.stopProgram}><span className="stop-sq" aria-hidden="true" />{t('ws.stop')}</button>
         <span className="grow" />
         <span className="muted">{count === 1 ? t('debug.bp1') : t('debug.bps', { n: count })}</span>
       </div>

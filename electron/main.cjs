@@ -5,6 +5,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const { findJdks, asJdk } = require('./jdk.cjs');
+const { installJdk } = require('./jdk-install.cjs');
 const { compile } = require('./compiler.cjs');
 const { Bench } = require('./bench.cjs');
 const project = require('./project.cjs');
@@ -118,8 +119,13 @@ bench.on('exit', ({ code }) => {
   if (state.compiled) startBench().catch(() => {});
 });
 
+/** Where a JDK that BlackJ downloads lives (next to its settings, so a portable copy keeps it). */
+function installedJdkDir() {
+  return path.join(app.getPath('userData'), 'jdk');
+}
+
 function chooseJdk() {
-  const jdks = findJdks({ preferred: settings.get().jdkPath, portableDir });
+  const jdks = findJdks({ preferred: settings.get().jdkPath, portableDir, installedDir: installedJdkDir() });
   state.jdk = jdks[0] || null;
   return jdks;
 }
@@ -360,13 +366,83 @@ function registerIpc() {
     if (!jdk) return { ok: false, error: { code: 'noJdk' } };
     settings.set({ jdkPath: jdk.home });
     chooseJdk();
-    return { ok: true, result: { jdk: state.jdk, jdks: findJdks({ preferred: jdk.home, portableDir }) } };
+    return { ok: true, result: { jdk: state.jdk, jdks: findJdks({ preferred: jdk.home, portableDir, installedDir: installedJdkDir() }) } };
   });
 
   ipcMain.handle('jdk:auto', () => {
     settings.set({ jdkPath: null });
     const jdks = chooseJdk();
     return { jdk: state.jdk, jdks };
+  });
+
+  // BlueJ ships a JDK; BlackJ downloads Eclipse Temurin on request when the PC has none.
+  let installing = null;
+  ipcMain.handle('jdk:install', () => {
+    if (!installing) {
+      installing = wrap(async () => {
+        await installJdk({ dir: installedJdkDir(), onProgress: (p) => send('jdk:progress', p) });
+        const jdks = chooseJdk();
+        if (!state.jdk) throw Object.assign(new Error('noJdk'), { code: 'noJdk' });
+        return { jdk: state.jdk, jdks };
+      }).finally(() => { installing = null; });
+    }
+    return installing;
+  });
+
+  // BlueJ's Print: a hidden window lays out the page, the system print dialog does the rest.
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const printPage = async (title, body) => {
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+      @page { margin: 16mm 14mm; }
+      body { margin: 0; color: #000; font: 10.5px/1.45 Consolas, "Cascadia Mono", monospace; }
+      h1 { margin: 0 0 12px; padding-bottom: 6px; border-bottom: 1px solid #bbb; font: 600 13px/1.3 "Segoe UI", sans-serif; }
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 0; vertical-align: top; white-space: pre-wrap; word-break: break-word; }
+      td.n { width: 1%; padding-right: 12px; color: #888; text-align: right; }
+      img { display: block; max-width: 100%; max-height: 240mm; margin: 0 auto; }
+    </style></head><body><h1>${esc(title)}</h1>${body}</body></html>`;
+    const file = path.join(smokeDir || app.getPath('userData'), 'print.html');
+    fs.writeFileSync(file, html, 'utf8');
+    if (smokeDir) return { ok: true, result: { file } };
+    const pw = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true, contextIsolation: true } });
+    try {
+      await pw.loadFile(file);
+      const r = await new Promise((resolve) => pw.webContents.print({}, (success, reason) => resolve({ success, reason })));
+      if (!r.success) return fail({ code: /cancel/i.test(r.reason || '') ? 'canceled' : 'printFailed', message: r.reason });
+      return { ok: true, result: {} };
+    } finally {
+      pw.destroy();
+      fs.rmSync(file, { force: true });
+    }
+  };
+  ipcMain.handle('print:source', (_e, { title, text }) => {
+    const rows = String(text || '').replace(/\r\n?/g, '\n').split('\n').map((l, i) => `<tr><td class="n">${i + 1}</td><td>${esc(l) || ' '}</td></tr>`).join('');
+    return printPage(title || 'BlackJ', `<table>${rows}</table>`);
+  });
+  ipcMain.handle('print:diagram', async (_e, { rect, title }) => {
+    const area = { x: Math.max(0, Math.round(rect.x)), y: Math.max(0, Math.round(rect.y)), width: Math.round(rect.width), height: Math.round(rect.height) };
+    if (area.width < 20 || area.height < 20) return fail({ code: 'invalidName' });
+    const img = await win.webContents.capturePage(area);
+    return printPage(title || 'BlackJ', `<img src="${img.toDataURL()}" alt="">`);
+  });
+
+  // BlueJ's Terminal → Save to file.
+  ipcMain.handle('file:saveText', async (_e, { text, name }) => {
+    let file = smokeDir ? path.join(smokeDir, 'console.txt') : null;
+    if (!file) {
+      const clean = String(name || 'Konsole.txt').replace(/[<>:"/\\|?*]/g, '').trim() || 'Konsole.txt';
+      const r = await dialog.showSaveDialog(win, {
+        title: 'Konsole speichern',
+        defaultPath: path.join(state.dir ? path.dirname(state.dir) : projectsHome(), clean),
+        filters: [{ name: 'Textdatei', extensions: ['txt'] }],
+      });
+      if (r.canceled || !r.filePath) return fail({ code: 'canceled' });
+      file = r.filePath;
+    }
+    return wrap(() => {
+      fs.writeFileSync(file, String(text || ''), 'utf8');
+      return { file };
+    });
   });
 
   ipcMain.handle('project:openDialog', async () => {

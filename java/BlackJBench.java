@@ -434,8 +434,10 @@ public class BlackJBench {
         }
         if (!Modifier.isStatic(m.getModifiers())) throw new BenchError("noMain", "type", c.getSimpleName());
         m.setAccessible(true);
+        List<String> args = new ArrayList<>();
+        if (req.get("args") instanceof List) for (Object a : (List<?>) req.get("args")) args.add(String.valueOf(a));
         try {
-            m.invoke(null, (Object) new String[0]);
+            m.invoke(null, (Object) args.toArray(new String[0]));
         } catch (InvocationTargetException e) {
             throw e.getCause();
         }

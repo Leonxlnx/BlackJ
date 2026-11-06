@@ -48,7 +48,11 @@ const P = {
   stepOver: <><path d="M4 13a8 8 0 0 1 15-3" /><path d="M19.5 5v5h-5" /><circle cx="12" cy="18" r="1.5" /></>,
   stepInto: <><path d="M12 3.5v10M8 10l4 4 4-4" /><circle cx="12" cy="19" r="1.5" /></>,
   stepOut: <><path d="M12 14V4M8 7.5l4-4 4 4" /><circle cx="12" cy="19" r="1.5" /></>,
-  folderPlus: <><path d="M3 7.5V18a1.5 1.5 0 0 0 1.5 1.5h15A1.5 1.5 0 0 0 21 18V9a1.5 1.5 0 0 0-1.5-1.5h-7.2L10.5 5H4.5A1.5 1.5 0 0 0 3 6.5" /><path d="M12 11v5M9.5 13.5h5" /></>,
+  inherit: <><path d="M12 20V9.5" /><path d="M7.5 10L12 4l4.5 6z" /></>,
+  pause: <path d="M9 6v12M15 6v12" />,
+  printer: <><path d="M7 9V4h10v5" /><rect x="3.5" y="9" width="17" height="7.5" rx="1.5" /><path d="M7 14h10v6H7z" /></>,
+  download: <><path d="M12 4v11M7 10.5l5 5 5-5" /><path d="M5 19.5h14" /></>,
+  folderPlus:<><path d="M3 7.5V18a1.5 1.5 0 0 0 1.5 1.5h15A1.5 1.5 0 0 0 21 18V9a1.5 1.5 0 0 0-1.5-1.5h-7.2L10.5 5H4.5A1.5 1.5 0 0 0 3 6.5" /><path d="M12 11v5M9.5 13.5h5" /></>,
 };
 
 export default function Icon({ name, ...rest }) {

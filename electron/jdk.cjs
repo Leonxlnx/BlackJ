@@ -67,10 +67,11 @@ function candidates(extra = []) {
 }
 
 /** All usable JDKs (Java 11 or newer), best first: chosen path, portable folder, then newest. */
-function findJdks({ preferred, portableDir } = {}) {
+function findJdks({ preferred, portableDir, installedDir } = {}) {
   const extra = [];
   if (preferred) extra.push({ path: preferred, source: 'settings' });
   if (portableDir) extra.push({ path: path.join(portableDir, 'jdk'), source: 'portable' });
+  if (installedDir) for (const c of children(installedDir)) extra.push({ path: c, source: 'BlackJ' });
   const seen = new Set();
   const found = [];
   for (const [home, source] of candidates(extra)) {

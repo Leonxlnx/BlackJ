@@ -4,6 +4,7 @@ import { useT } from '../i18n.js';
 import * as A from '../actions.js';
 import { api } from '../api.js';
 import Icon, { Select } from './Icon.jsx';
+import { JdkInstall } from './Home.jsx';
 
 function Switch({ checked, onChange, label }) {
   return <button className="switch" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} />;
@@ -120,6 +121,7 @@ export default function Settings() {
           <Row tour="java" title={t('settings.javaCurrent')} desc={info.jdk ? `Java ${info.jdk.version} · ${info.jdk.source}` : t('home.javaMissing')}>
             <div className="action-row">
               {s.jdkPath && <button className="btn btn-sm btn-quiet" onClick={autoJdk}>{t('settings.javaAuto')}</button>}
+              {!info.jdk && <JdkInstall />}
               <button className="btn btn-sm" onClick={chooseJdk}>
                 <Icon name="folderOpen" />
                 {t('settings.javaChoose')}

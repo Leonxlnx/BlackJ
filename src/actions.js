@@ -198,6 +198,50 @@ export async function saveDiagramImage(rect) {
   return r.ok ? r.result : null;
 }
 
+/** No Java on this PC: downloads a JDK into BlackJ's folder (BlueJ ships one in its installer). */
+export async function installJdk() {
+  if (getState().jdkInstall) return;
+  setState({ jdkInstall: { phase: 'lookup' } });
+  const off = api.onJdkProgress((p) => setState({ jdkInstall: p }));
+  try {
+    const r = await api.installJdk();
+    if (r.ok) {
+      setState((s) => ({ info: { ...s.info, jdk: r.result.jdk, jdks: r.result.jdks } }));
+      toast(t('jdk.installed', { version: r.result.jdk.version }));
+    } else toast(errorText(r.error), 'bad');
+  } finally {
+    off();
+    setState({ jdkInstall: null });
+  }
+}
+
+/** Prints the class diagram as it is drawn now (BlueJ: Project > Print). */
+export async function printDiagram(rect) {
+  const s = getState();
+  if (!s.project) return;
+  const r = await api.print.diagram({ rect, title: `${s.project.name} – ${t('diagram.title')}` });
+  if (!r.ok && r.error.code !== 'canceled') toast(errorText(r.error), 'bad');
+}
+
+/** Prints a source file with line numbers, the project and class name on top. */
+export async function printFile(name) {
+  const s = getState();
+  const f = s.files[name];
+  if (!f) return;
+  setState({ menu: null });
+  const r = await api.print.source({ title: `${s.project.name} – ${name}`, text: f.content });
+  if (!r.ok && r.error.code !== 'canceled') toast(errorText(r.error), 'bad');
+}
+
+/** Saves what the console shows to a text file (BlueJ: Terminal > Save to file). */
+export async function saveConsole() {
+  const s = getState();
+  const text = s.console.map((l) => (l.stream === 'call' ? `> ${l.text}\n` : l.stream === 'note' ? `# ${l.text}\n` : l.text)).join('');
+  const r = await api.saveText({ text, name: `${s.project ? s.project.name : 'BlackJ'} – ${t('dock.console')}.txt` });
+  if (r.ok) toast(t('console.saved', { file: r.result.file }));
+  else if (r.error.code !== 'canceled') toast(errorText(r.error), 'bad');
+}
+
 /** Packs the project's sources (no compiled classes) into a .zip, e.g. to hand in homework. */
 export async function exportZip(file) {
   if (!getState().project) return;
@@ -531,6 +575,7 @@ export async function ensureCompiled() {
 // ------------------------------------------------------------------ object bench
 
 function onBenchState(ev) {
+  if (['ready', 'stopped', 'exit'].includes(ev.state)) fixtureLog = [];
   setState((s) => {
     const bench = { ...s.bench };
     if (ev.state === 'ready') Object.assign(bench, { state: 'ready', objects: [], java: ev.java });
@@ -601,7 +646,10 @@ function literal(arg, param) {
   const v = String(arg.text ?? '').trim();
   if (param && param.category === 'string' && !/^".*"$/.test(v) && v !== 'null') return JSON.stringify(arg.text ?? '');
   if (param && param.category === 'char' && v.length === 1) return `'${v}'`;
-  if (param && param.category === 'array' && !/^\{.*\}$/.test(v)) return `new ${param.type}{${v}}`;
+  if (param && param.category === 'array' && !/^\{.*\}$/.test(v)) {
+    const items = param.type === 'String[]' ? (v.match(/"(?:[^"\\]|\\.)*"|[^,]+/g) || []).map((x) => x.trim()).filter(Boolean).map((x) => (/^".*"$/.test(x) ? x : JSON.stringify(x))).join(', ') : v;
+    return `new ${param.type}{${items}}`;
+  }
   if (param && param.category === 'array') return `new ${param.type}${v}`;
   if (param && param.category === 'enum' && /^[A-Za-z_]\w*$/.test(v)) return `${simpleName(param.type)}.${v}`;
   return v.replace(/^(-?\d+),(\d+)$/, '$1.$2');
@@ -635,6 +683,7 @@ export async function createObject(cls, ctor, args, name, { keepSide = false } =
   if (getState().settings.clearConsoleOnCall) clearConsole();
   logCall(stmt);
   record(stmt);
+  fixtureLog.push(stmt);
   setState((s) => ({ bench: { ...s.bench, objects: r.result.bench, lastNew: r.result.name }, dock: s.dock === 'pad' ? 'pad' : 'objects', exception: null, inspect: { ref: r.result.name, trail: [r.result.name] }, side: s.side === 'tutor' && !s.tutorPinned && !keepSide ? 'inspect' : s.side }));
   return { done: true, name: r.result.name };
 }
@@ -657,6 +706,7 @@ export async function callMethod({ target, cls, method, args, quiet = false }) {
   if (getState().settings.clearConsoleOnCall) clearConsole();
   logCall(res.void ? callText : `${callText}  →  ${shown}`);
   if (res.void) record(callText + ';');
+  fixtureLog.push(callText + ';');
   setState((s) => ({ bench: { ...s.bench, objects: res.bench }, exception: null, inspectTick: Date.now() }));
   if (!res.void && !quiet) setState({ dialog: { type: 'result', label: callText, result: res } });
   return { done: true, result: res };
@@ -666,11 +716,11 @@ export async function callMethod({ target, cls, method, args, quiet = false }) {
  * Runs a class's main method. For the tutor: `input` lines are typed into the console each time the
  * program waits (a wait with no line left stops it), and `timeoutMs` stops a program that runs on.
  */
-export async function runMain(cls, { input = null, timeoutMs = 0 } = {}) {
+export async function runMain(cls, { input = null, timeoutMs = 0, args = [] } = {}) {
   if (!(await ensureCompiled())) return { compileFailed: true };
   setState({ dock: 'console', menu: null, palette: null });
   if (getState().settings.clearConsoleOnCall) clearConsole();
-  logCall(`${simpleName(cls)}.main(new String[0])`);
+  logCall(`${simpleName(cls)}.main(${args.length ? `new String[]{${args.map((a) => JSON.stringify(a)).join(', ')}}` : 'new String[0]'})`);
   await breakpointsReady();
   const out = { finished: false, timedOut: false, waitingForInput: false };
   const lines = input ? [...input] : null;
@@ -691,7 +741,7 @@ export async function runMain(cls, { input = null, timeoutMs = 0 } = {}) {
     });
   }
   if (timeoutMs) timer = setTimeout(() => { out.timedOut = true; stopProgram(); }, timeoutMs);
-  const r = await api.bench.main({ className: cls });
+  const r = await api.bench.main({ className: cls, args });
   clearTimeout(timer);
   if (unsubscribe) unsubscribe();
   if (!r.ok) {
@@ -843,6 +893,212 @@ export async function stopRecording(save = true) {
   await saveFile(file);
   openFile(file);
   note(t('record.saved', { method: rec.method }));
+}
+
+// ------------------------------------------------------------------ inheritance arrows (BlueJ: draw an "inherits" arrow)
+
+/** Splits a type list at top-level commas: "A, Comparable<B, C>" -> ["A", "Comparable<B, C>"]. */
+function typeList(text) {
+  const out = [];
+  let depth = 0;
+  let cur = '';
+  for (const c of text) {
+    if (c === '<') depth++;
+    if (c === '>') depth--;
+    if (c === ',' && depth === 0) { out.push(cur.trim()); cur = ''; } else cur += c;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+/** Rewrites the extends / implements clauses of `simple` in `content`; fn gets and returns { ext, impl }. */
+function rewriteHeader(content, simple, fn) {
+  const m = new RegExp(`\\b(class|interface|enum|record)\\s+${simple}\\b`).exec(content);
+  if (!m) return null;
+  let i = m.index + m[0].length;
+  const skip = (o, c) => {
+    let j = i;
+    while (/\s/.test(content[j] || '')) j++;
+    if (content[j] !== o) return;
+    for (let d = 0; j < content.length; j++) {
+      if (content[j] === o) d++;
+      else if (content[j] === c && --d === 0) { i = j + 1; return; }
+    }
+  };
+  skip('<', '>');
+  if (m[1] === 'record') skip('(', ')');
+  const open = content.indexOf('{', i);
+  if (open < 0) return null;
+  const clause = content.slice(i, open);
+  const ext = /\bextends\s+([\s\S]*?)(?=\bimplements\b|$)/.exec(clause);
+  const impl = /\bimplements\s+([\s\S]*)$/.exec(clause);
+  const next = fn({ ext: ext ? typeList(ext[1]) : [], impl: impl ? typeList(impl[1]) : [] });
+  // Keeps the brace where the student put it (same line or the next).
+  const tail = /\n\s*$/.test(clause) ? /\s*$/.exec(clause)[0] : ' ';
+  const text = (next.ext.length ? ' extends ' + next.ext.join(', ') : '') + (next.impl.length ? ' implements ' + next.impl.join(', ') : '') + tail;
+  return content.slice(0, i) + text + content.slice(open);
+}
+
+const bare = (type) => simpleName(type.replace(/<[\s\S]*$/, '').trim());
+
+/** BlueJ's inheritance arrow: `from` extends (or implements) `to`, written into from's source. */
+export async function addRelation(from, to) {
+  const s = getState();
+  const model = modelOf(s.files);
+  const a = model.byName[from];
+  const b = model.byName[to];
+  if (!a || !b || from === to || s.project.readOnly) return;
+  // No cycles: `to` must not already inherit from `from`.
+  const seen = new Set();
+  for (const queue = [to]; queue.length;) {
+    const c = queue.shift();
+    if (c === from) {
+      toast(t('relation.cycle', { a: a.simple, b: b.simple }), 'bad');
+      return;
+    }
+    if (seen.has(c) || !model.byName[c]) continue;
+    seen.add(c);
+    queue.push(...(model.byName[c].parents || []));
+  }
+  const toInterface = b.kind === 'interface';
+  if (!toInterface && (a.kind === 'interface' || a.kind === 'enum' || b.kind === 'enum')) {
+    toast(t('relation.invalid', { a: a.simple, b: b.simple }), 'bad');
+    return;
+  }
+  const file = fileOfClass(from);
+  let content = rewriteHeader(s.files[file].content, a.simple, ({ ext, impl }) => {
+    if (toInterface && a.kind !== 'interface') return { ext, impl: impl.some((x) => bare(x) === b.simple) ? impl : [...impl, b.simple] };
+    if (toInterface) return { ext: ext.some((x) => bare(x) === b.simple) ? ext : [...ext, b.simple], impl };
+    return { ext: [b.simple], impl };
+  });
+  if (!content) return;
+  const pkgB = packageOfClass(to);
+  if (pkgB && pkgB !== packageOfClass(from) && !new RegExp(`import\\s+${to.replace(/\./g, '\\.')}\\s*;`).test(content)) {
+    const pkgLine = /^package\s+[^;]+;[ \t]*\n/m.exec(content);
+    const at = pkgLine ? pkgLine.index + pkgLine[0].length : 0;
+    content = content.slice(0, at) + `${pkgLine ? '\n' : ''}import ${to};\n` + content.slice(at);
+  }
+  editFile(file, content);
+  await saveFile(file);
+}
+
+/** Removes `to` from the extends / implements clauses of `from`. */
+export async function removeRelation(from, to) {
+  const s = getState();
+  const file = fileOfClass(from);
+  const target = simpleName(to);
+  const content = rewriteHeader(s.files[file].content, simpleName(from), ({ ext, impl }) => ({ ext: ext.filter((x) => bare(x) !== target), impl: impl.filter((x) => bare(x) !== target) }));
+  if (!content) return;
+  setState({ menu: null });
+  editFile(file, content);
+  await saveFile(file);
+}
+
+// ------------------------------------------------------------------ test fixture (BlueJ: object bench to test fixture and back)
+
+// Every object creation and method call since the bench last started, so the bench can become a setUp().
+let fixtureLog = [];
+
+/** Index of the brace that closes the one before `from`, skipping strings, chars and comments. */
+function closingBrace(text, from) {
+  let depth = 1;
+  for (let i = from; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"' || c === "'") {
+      for (i++; i < text.length && text[i] !== c; i++) if (text[i] === '\\') i++;
+    } else if (c === '/' && text[i + 1] === '/') i = text.indexOf('\n', i) < 0 ? text.length : text.indexOf('\n', i);
+    else if (c === '/' && text[i + 1] === '*') i = text.indexOf('*/', i + 2) < 0 ? text.length : text.indexOf('*/', i + 2) + 1;
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** The setUp method (annotated @BeforeEach or @Before, else named setUp): its name and body range. */
+function findSetUp(content) {
+  const m = /@(?:BeforeEach|Before)\b[^;{]*?\bvoid\s+(\w+)\s*\(\s*\)[^{;]*\{/.exec(content) || /\bvoid\s+(setUp)\s*\(\s*\)[^{;]*\{/.exec(content);
+  if (!m) return null;
+  const open = m.index + m[0].length;
+  const close = closingBrace(content, open);
+  return close < 0 ? null : { name: m[1], open, close };
+}
+
+/** Writes the objects on the bench into the test class: a field for each object and a setUp() that builds them. */
+export async function benchToFixture(testClass) {
+  const s = getState();
+  const file = fileOfClass(testClass);
+  const f = file && s.files[file];
+  if (!f || s.project.readOnly) return;
+  const onBench = new Set(s.bench.objects.map((o) => o.name));
+  const declare = (l) => /^([\w$.<>[\], ?]+?)\s+([\w$]+)\s*=\s*new\b/.exec(l);
+  const everDeclared = new Set(fixtureLog.map(declare).filter(Boolean).map((m) => m[2]));
+  // A removed object takes its calls with it; objects from elsewhere (code pad, Get) have no statement to write.
+  const lines = fixtureLog.filter((l) => [...l.matchAll(/[\w$]+/g)].every((w) => !everDeclared.has(w[0]) || onBench.has(w[0])));
+  const decls = lines.map(declare).filter(Boolean);
+  if (!decls.length) {
+    toast(t('fixture.nothing'), 'bad');
+    return;
+  }
+  let content = f.content;
+  const junit4 = /import\s+org\.junit\.Test\s*;/.test(content);
+  const body = lines.map((l) => '        ' + l.replace(/^[\w$.<>[\], ?]+?\s+([\w$]+)\s*=\s*new\b/, '$1 = new')).join('\n');
+  const fields = decls.filter((m) => !new RegExp(`\\b${m[2]}\\s*[;=]`).test(content.slice(0, (findSetUp(content) || { open: content.length }).open))).map((m) => `    private ${m[1]} ${m[2]};\n`).join('');
+  const setUp = findSetUp(content);
+  if (setUp) content = content.slice(0, setUp.open) + '\n' + body + '\n    ' + content.slice(setUp.close);
+  const classOpen = /\bclass\s+\w+[^{]*\{[ \t]*\n?/.exec(content);
+  if (!classOpen) return;
+  const at = classOpen.index + classOpen[0].length;
+  const method = setUp ? '' : `\n    @${junit4 ? 'Before' : 'BeforeEach'}\n    public void setUp() {\n${body}\n    }\n`;
+  content = content.slice(0, at) + fields + method + (fields || method ? '\n' : '') + content.slice(at).replace(/^\n+/, '');
+  const imp = junit4 ? 'org.junit.Before' : 'org.junit.jupiter.api.BeforeEach';
+  if (!setUp && !new RegExp(`import\\s+${imp.replace(/\./g, '\\.')}\\s*;|import\\s+${imp.replace(/\.\w+$/, '').replace(/\./g, '\\.')}\\.\\*\\s*;`).test(content)) {
+    const lastImport = [...content.matchAll(/^import\s+[^;]+;[ \t]*$/gm)].pop();
+    content = lastImport ? content.slice(0, lastImport.index + lastImport[0].length) + `\nimport ${imp};` + content.slice(lastImport.index + lastImport[0].length) : `import ${imp};\n` + content;
+  }
+  editFile(file, content);
+  await saveFile(file);
+  openFile(file);
+  setState({ menu: null });
+  toast(t(decls.length === 1 ? 'fixture.saved1' : 'fixture.saved', { n: decls.length, cls: simpleName(testClass) }));
+}
+
+/** Runs the test class's setUp() and puts the objects it builds on the bench. */
+export async function fixtureToBench(testClass) {
+  setState({ menu: null });
+  if (!(await ensureCompiled())) return;
+  const f = getState().files[fileOfClass(testClass)];
+  const setUp = f && findSetUp(f.content);
+  if (!setUp) {
+    toast(t('fixture.noSetUp'), 'bad');
+    return;
+  }
+  await breakpointsReady();
+  const made = await api.bench.create({ className: testClass, key: '<init>()', args: [], name: null });
+  if (!made.ok) {
+    toast(errorText(made.error), 'bad');
+    return;
+  }
+  const tmp = made.result.name;
+  let count = 0;
+  try {
+    const call = await api.bench.call({ target: tmp, className: testClass, key: setUp.name + '()', args: [] });
+    if (!call.ok) {
+      if (call.error.kind === 'exception') setException(call.error, `${simpleName(testClass)}.${setUp.name}()`);
+      else toast(errorText(call.error), 'bad');
+      return;
+    }
+    const ins = await api.bench.inspect({ ref: tmp });
+    for (const fl of (ins.ok && ins.result.fields) || []) {
+      if (!fl.value || !fl.value.handle) continue;
+      let r = await api.bench.store({ ref: fl.value.handle, name: fl.name });
+      if (!r.ok && r.error.code === 'nameTaken') r = await api.bench.store({ ref: fl.value.handle, name: null });
+      if (r.ok) count++;
+    }
+  } finally {
+    const rm = await api.bench.remove({ name: tmp });
+    if (rm.ok) setState((s) => ({ bench: { ...s.bench, objects: rm.result }, dock: 'objects' }));
+  }
+  toast(count ? t(count === 1 ? 'fixture.loaded1' : 'fixture.loaded', { n: count }) : t('fixture.empty'), count ? undefined : 'bad');
 }
 
 // ------------------------------------------------------------------ debugger

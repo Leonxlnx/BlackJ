@@ -441,6 +441,9 @@ export default function EditorPanel() {
       items.push({ label: tr('shortcuts.comment'), keys: 'ctrl #', disabled: ro, onClick: run('editor.action.commentLine') });
       items.push({ label: tr('editor.format'), keys: 'shift Alt F', disabled: ro || !isCode, onClick: run('editor.action.formatDocument') });
       items.push({ label: tr('shortcuts.find'), keys: 'ctrl H', onClick: run('editor.action.startFindReplaceAction') });
+      items.push({ label: tr('editor.goToLine'), keys: 'ctrl G', onClick: run('editor.action.gotoLine') });
+      items.push({ type: 'sep' });
+      items.push({ label: tr('print.file'), icon: 'printer', onClick: () => A.printFile(name) });
       A.openMenu({ x: e.event.posx, y: e.event.posy, items });
     });
     ed.onDidChangeModelContent(() => {
@@ -693,7 +696,7 @@ export default function EditorPanel() {
                       { label: t('tab.close'), icon: 'close', onClick: () => { A.saveFile(name); A.closeTab(name); } },
                       { label: t('tab.closeOthers'), disabled: !others.length, onClick: () => others.forEach((x) => { A.saveFile(x); A.closeTab(x); }) },
                       { label: t('tab.closeAll'), onClick: () => tabs.forEach((x) => { A.saveFile(x); A.closeTab(x); }) },
-                      ...(name !== '#readme' ? [{ type: 'sep' }, { label: t('tab.showInDiagram'), icon: 'grid', onClick: () => { const f = files[name]; if (f.pkg !== getState().pkg) A.enterPackage(f.pkg); setState({ selectedClass: f.className }); } }] : []),
+                      ...(name !== '#readme' ? [{ type: 'sep' }, { label: t('tab.showInDiagram'), icon: 'grid', onClick: () => { const f = files[name]; if (f.pkg !== getState().pkg) A.enterPackage(f.pkg); setState({ selectedClass: f.className }); } }, { label: t('print.file'), icon: 'printer', onClick: () => A.printFile(name) }] : []),
                     ],
                   });
                 }}

@@ -486,6 +486,14 @@ html.resizing-y, html.resizing-y * { cursor: row-resize !important; user-select:
 @container (max-width: 560px) { .diagram-legend { display: none; } }
 .diagram-legend svg { width: 24px; height: 10px; margin-right: 4px; vertical-align: -1px; }
 .diagram-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; color: var(--muted); }
+.diagram.linking, .diagram.linking .class-card { cursor: crosshair; }
+.edges path.link-preview { stroke: var(--accent); stroke-dasharray: 4 4; }
+.link-hint {
+  position: absolute; left: 12px; right: 12px; top: 12px; margin: 0 auto; width: fit-content; max-width: calc(100% - 24px); z-index: 3; display: flex; gap: 12px; align-items: center; height: 32px; padding: 0 14px;
+  background: var(--surface); box-shadow: var(--card-shadow); border-radius: var(--r-pill); font-size: var(--fs-small); white-space: nowrap;
+}
+.link-hint span { overflow: hidden; text-overflow: ellipsis; }
+.jdk-progress { font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* ------------------------------------------------------------------ editor */
 
