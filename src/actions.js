@@ -21,6 +21,7 @@ export async function init() {
   applyLook(info.settings);
   api.bench.onOut(onBenchOut);
   api.bench.onState(onBenchState);
+  if (api.bench.onWindow) api.bench.onWindow((w) => note(w.title ? t('console.window', { title: w.title }) : t('console.windowUntitled')));
   api.ai.onEvent(onAiEvent);
   Agent.init();
   if (api.debug) api.debug.onEvent(onDebugEvent);
@@ -1351,7 +1352,7 @@ export async function sendAfterStop(text) {
   if (!getState().chat.busy) await askTutor(text);
 }
 
-export { acceptProposal, rejectProposal, undoChange } from './agent.js';
+export { acceptProposal, rejectProposal, undoChange, undoTurn } from './agent.js';
 
 export async function retryLast() {
   const turns = getState().chat.turns;

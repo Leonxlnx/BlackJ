@@ -9,13 +9,19 @@ import Icon from './Icon.jsx';
 const MAX_ROWS = 12;
 
 /** One line per tool call: a small state dot, what the tutor does, and how it went. */
-export function ToolRows({ parts, turnId }) {
+export function ToolRows({ parts, turnId, tail = false }) {
   const t = useT();
   const tour = useStore((s) => s.tour);
   const [open, setOpen] = useState(false);
-  const shown = parts.length > 4 && !open ? parts.slice(0, 3) : parts;
+  // A long build shows its latest steps (where it is now); otherwise the first ones.
+  const cut = parts.length > 4 && !open;
+  const shown = cut ? (tail ? parts.slice(-3) : parts.slice(0, 3)) : parts;
+  const more = cut && (
+    <button className="link" onClick={() => setOpen(true)}>{t('agent.more', { n: parts.length - shown.length })}</button>
+  );
   return (
     <div className="agent-steps">
+      {tail && more}
       {shown.map((p) => {
         const live = tour && tour.callId === p.callId && tour.mode === 'tour';
         const summary = live ? t('tour.count', { i: tour.index + 1, n: tour.steps.length }) : p.summary;
@@ -40,9 +46,7 @@ export function ToolRows({ parts, turnId }) {
           </div>
         );
       })}
-      {shown.length < parts.length && (
-        <button className="link" onClick={() => setOpen(true)}>{t('agent.more', { n: parts.length - shown.length })}</button>
-      )}
+      {!tail && more}
     </div>
   );
 }
@@ -130,13 +134,76 @@ export function ContextChips() {
   );
 }
 
+/**
+ * What a build made: each file once with its lines added and removed, whether it compiles, and
+ * the two things to do next: start the program, or take the whole build back.
+ */
+export function BuildCard({ turnId }) {
+  const t = useT();
+  const proposals = useStore((s) => s.agent.proposals);
+  const files = useStore((s) => s.files);
+  const compile = useStore((s) => s.compile);
+  const running = useStore((s) => s.bench.state === 'running' || s.bench.state === 'waiting');
+  const changes = Object.values(proposals)
+    .filter((p) => p.turnId === turnId && p.kind !== 'delete' && ['applied', 'accepted', 'undone'].includes(p.status))
+    .sort((a, b) => (a.appliedAt || 0) - (b.appliedAt || 0));
+  const rows = useMemo(() => {
+    const byFile = new Map();
+    for (const p of changes) {
+      const e = byFile.get(p.file) || { file: p.file, before: p.before, created: false };
+      byFile.set(p.file, { ...e, after: p.after, created: e.created || p.kind === 'create', undone: p.status === 'undone' });
+    }
+    return [...byFile.values()].map((e) => ({ ...e, diff: lineDiff(e.before, e.after) }));
+  }, [changes.map((p) => p.id + p.status).join()]);
+  if (!rows.length) return null;
+  const undone = rows.every((r) => r.undone);
+  const model = A.modelOf(files);
+  const touched = rows.map((r) => files[r.file] && files[r.file].className).filter(Boolean);
+  const main = touched.find((c) => model.byName[c] && model.byName[c].hasMain) || (model.list.find((c) => c.hasMain) || {}).fileClass;
+  const stale = rows.some((r) => files[r.file] && compile.snapshot && compile.snapshot[r.file] !== files[r.file].content);
+  const state = compile.state === 'errors' ? 'bad' : compile.state === 'ok' && !stale ? 'ok' : 'stale';
+  return (
+    <div className="build-card" data-status={undone ? 'undone' : state}>
+      <div className="build-head">
+        <span className="name">{undone ? t('build.undone') : t(rows.length === 1 ? 'build.done1' : 'build.done', { n: rows.length })}</span>
+        {!undone && <span className={'state-dot ' + state} />}
+        {!undone && <span className="muted">{t('build.state.' + state)}</span>}
+      </div>
+      <div className="build-files">
+        {rows.map((r) => (
+          <button key={r.file} className="build-file" disabled={r.undone || !files[r.file]} onClick={() => A.openFile(r.file)}>
+            <span className="name">{fileName(r.file)}</span>
+            {r.created && <span className="tag">{t('agent.diff.new')}</span>}
+            <span className="stat">+{r.diff.added} −{r.diff.removed}</span>
+          </button>
+        ))}
+      </div>
+      {!undone && (
+        <div className="build-foot">
+          {main && (
+            <button className="btn btn-sm btn-primary" data-tour="build-run" disabled={running} onClick={() => A.runMain(main)}>
+              <Icon name="play" />
+              {t('build.run', { name: A.simpleName(main) })}
+            </button>
+          )}
+          {state === 'bad' && <button className="btn btn-sm" onClick={() => A.askTutor(t('build.fixPrompt'))}>{t('build.fix')}</button>}
+          <span className="grow" />
+          <button className="btn btn-sm btn-quiet" onClick={() => A.undoTurn(turnId)}>{t('build.undoAll')}</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The parts of an assistant turn in order: text, groups of tool rows, change cards. */
-export function groupParts(parts) {
+export function groupParts(parts, { build = false } = {}) {
   const out = [];
   for (const p of parts) {
+    // A build writes many files at once: one row per file, and the summary card at the end.
+    if (build && p.type === 'diff') continue;
     if (p.type === 'tool') {
       // The change card is the row; a write that failed before it became a card keeps its row.
-      if (isWriteTool(p.name) && p.input && (p.status === 'running' || parts.some((q) => q.type === 'diff' && q.proposalId === 'p' + p.callId))) continue;
+      if (!build && isWriteTool(p.name) && p.input && (p.status === 'running' || parts.some((q) => q.type === 'diff' && q.proposalId === 'p' + p.callId))) continue;
       const last = out[out.length - 1];
       if (last && last.type === 'tools') last.parts.push(p);
       else out.push({ type: 'tools', parts: [p], key: 'g' + p.callId });

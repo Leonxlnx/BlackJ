@@ -689,7 +689,9 @@ function settle(p, result, noteKey) {
 function propose(change, call) {
   const id = 'p' + call.callId;
   const s = getState();
-  const auto = !!s.settings.agentWrite && s.chat.mode === 'explain' && change.kind !== 'delete';
+  // Build mode writes straight away (the student undoes the whole build with one click); explain
+  // mode only when the student allowed it in the settings. Deleting always asks.
+  const auto = change.kind !== 'delete' && (s.chat.mode === 'build' || (!!s.settings.agentWrite && s.chat.mode === 'explain'));
   setProposal(id, { ...change, callId: call.callId, turnId: call.turnId, status: 'pending', createdAt: Date.now() });
   // The card goes right after the call's row (which is hidden for writes: the card is the row).
   patchTurn(call.turnId, (turn) => {
@@ -822,6 +824,36 @@ export async function undoChange(id) {
   }
   setProposal(id, { status: 'undone' });
   addNote('agent.note.undone', p);
+}
+
+/** Alles rückgängig: every change of one turn, as long as each file still holds what the tutor wrote last. */
+export async function undoTurn(turnId) {
+  const list = Object.values(getState().agent.proposals)
+    .filter((p) => p.turnId === turnId && (p.status === 'applied' || p.status === 'accepted') && p.kind !== 'delete')
+    .sort((a, b) => (b.appliedAt || 0) - (a.appliedAt || 0));
+  if (!list.length) return;
+  const newest = new Map();
+  const oldest = new Map();
+  for (const p of list) {
+    if (!newest.has(p.file)) newest.set(p.file, p);
+    oldest.set(p.file, p);
+  }
+  for (const [file, p] of newest) {
+    const now = getState().files[file];
+    if (!now || now.content !== p.after) {
+      toast(t('agent.undoConflict'), 'bad');
+      return;
+    }
+  }
+  for (const [file, p] of oldest) {
+    if (p.kind === 'create') await A.deleteClass(p.className);
+    else {
+      A.editFile(file, p.before);
+      await A.saveFile(file);
+    }
+  }
+  for (const p of list) setProposal(p.id, { status: 'undone' });
+  setState((s) => ({ chat: { ...s.chat, notes: [...(s.chat.notes || []), t('agent.note.undoneAll')] } }));
 }
 
 /** The newest applied proposal of a file is the only one that offers Rückgängig. */

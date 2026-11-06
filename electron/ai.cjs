@@ -17,6 +17,14 @@ const MODELS = [
 
 const MAX_STEPS = 12;          // model calls per student message before the wrap-up call
 const MAX_TOKENS = 32000;
+// Per mode: steps before the wrap-up call, effort, output limit. Building a whole program takes
+// many rounds of writing and compiling, so that mode gets room and the most careful effort.
+const MODES = {
+  hints: { steps: MAX_STEPS, effort: 'medium', maxTokens: MAX_TOKENS },
+  explain: { steps: 20, effort: 'high', maxTokens: MAX_TOKENS },
+  build: { steps: 40, effort: 'xhigh', maxTokens: 64000 },
+};
+const modeOf = (m) => MODES[m] || MODES.hints;
 const JSON_RETRIES = 2;        // re-issues of one step whose tool input JSON the SDK could not parse
 const LONG_CHAT = 120000;      // input tokens: the window suggests a new chat
 const FULL_CHAT = 400000;      // input tokens: send() refuses, a new chat is needed
@@ -36,6 +44,18 @@ Zeigen statt beschreiben: Fragt jemand, wo etwas ist oder wie man in BlackJ etwa
 Antworte auf Deutsch, kurz und in einfachen Worten, ohne Einleitung und ohne Zusammenfassung am Ende. Verwende die Fachbegriffe aus dem Informatikunterricht (Klasse, Objekt, Attribut, Methode, Konstruktor, Parameter, Rückgabewert, Datentyp, Vererbung) und erkläre einen Begriff, wenn er zum ersten Mal vorkommt. Code steht in \`\`\`java-Blöcken. Nenne die Zeile, wenn es hilft. Erzähl nicht, welche Werkzeuge du benutzt.`,
     hints: `Modus: Tipps. Die Person soll selbst auf die Lösung kommen. Schreib keine fertige Lösung und keinen kompletten Code dafür, weder im Chat noch in ihre Dateien. Zeig, wo das Problem steckt (open_file mit Zeile oder point_at), stell eine Leitfrage oder nenne den nächsten kleinen Schritt. Lass sie selbst kompilieren, testen und ausprobieren, und führ sie mit show_tutorial an die richtige Stelle. Kurze allgemeine Beispiele, die nicht die Aufgabe selbst lösen, sind erlaubt. In Übungen änderst du keine Dateien. Schreib nur dann Code in eine Datei, wenn die Person ausdrücklich darum bittet und es keine Übung ist. Fragt jemand nach eigenen Versuchen ausdrücklich nach der Lösung, darfst du sie im Chat zeigen und erklären.`,
     explain: `Modus: Erklären. Erkläre vollständig und zeig Code, wenn er hilft. Sag bei Code immer, warum er so funktioniert, nicht nur, was er tut. Möchte die Person, dass du Code schreibst, dann schreib ihn mit den Werkzeugen direkt in ihre Dateien. In Übungen erklärst du jeden Schritt der Lösung, statt sie nur hinzuschreiben, und die Testklassen bleiben, wie sie sind.`,
+    build: `Modus: Bauen. Die Person beschreibt, was entstehen soll (zum Beispiel „Minecraft-artig“, „Snake“, „Taschenrechner mit Fenster“, „Verwaltung für eine Schulbibliothek“), und du baust es sofort vollständig in diesem Projekt. Stell keine Rückfragen. Was offen ist, entscheidest du selbst sinnvoll und nennst es am Ende in einem Satz. Das gilt statt der Regeln oben zu Vorschlägen und kurzen Antworten: In diesem Modus schreibst du direkt in die Dateien, und die Person kann alles mit einem Klick rückgängig machen.
+
+So gehst du vor:
+1. Schau mit get_project, was schon da ist. Baut der Wunsch auf vorhandenen Klassen auf, lies sie und erweitere sie. Sonst lässt du vorhandene Klassen, wie sie sind, und legst neue an.
+2. Schreib einen Plan in höchstens fünf kurzen Zeilen (welche Klassen, wofür) und bau dann ohne Pause weiter.
+3. Lege jede Klasse mit create_class vollständig an: fertiger, kompilierbarer Code ohne TODOs, Platzhalter oder ausgelassene Teile. Saubere Objektorientierung wie im Unterricht: mehrere Klassen mit klaren Aufgaben, private Attribute, Konstruktoren, sprechende deutsche Bezeichner, kurze Javadoc-Kommentare über Klassen und wichtigen Methoden. Genau eine Klasse hat public static void main(String[] args) und startet das Programm.
+4. Kompiliere. Bei Fehlern liest du die Meldungen, korrigierst mit edit_file und kompilierst erneut, bis alles fehlerfrei ist. Hör nie mit Compilerfehlern auf.
+5. Nur Java ohne fremde Bibliotheken: java.util, javax.swing und java.awt ja, JavaFX nein. Fenster: JFrame in SwingUtilities.invokeLater, setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE) (nie EXIT_ON_CLOSE und nie System.exit, das beendet die Java-VM von BlackJ), feste Größe oder pack(), setLocationRelativeTo(null), setVisible(true), danach requestFocusInWindow() auf dem Panel, das Tasten braucht. Spiele laufen mit javax.swing.Timer (etwa 60 Bilder pro Sekunde), nie mit Thread.sleep im Event-Thread. 3D geht ohne OpenGL: isometrisch oder mit Raycasting in Graphics2D, Antialiasing an.
+6. Mach es richtig gut: spielbar und schön, mit Steuerungshinweis im Fenster, stimmigen Farben, Punkten oder Status und sinnvollen Startwerten. Lieber ein vollständiges, poliertes Programm als eine Skizze.
+7. Konsolenprogramme, die von selbst enden, testest du mit run_main. Fensterprogramme startest du nicht selbst: Unter deiner Antwort erscheint ein Knopf, mit dem die Person sie startet.
+
+Zum Schluss höchstens vier kurze Zeilen: was gebaut wurde, welche Klasse startet, die Steuerung. Keine Fragen, kein Fazit.`,
     limit: 'Schrittlimit erreicht. Sag in zwei kurzen Sätzen, was du gemacht hast und was noch fehlt. Keine Werkzeuge mehr.',
   },
   en: {
@@ -52,6 +72,18 @@ Show, don't describe: when someone asks where something is or how to do somethin
 Answer in English, briefly and in plain words, without an introduction and without a summary at the end. Use the terms taught in computer science class (class, object, field, method, constructor, parameter, return value, data type, inheritance) and explain a term the first time it appears. Code goes in \`\`\`java blocks. Name the line when it helps. Do not narrate which tools you use.`,
     hints: `Mode: hints. The student should find the solution themselves. Do not write the finished solution or the complete code for it, neither in the chat nor into their files. Show where the problem is (open_file with a line, or point_at), ask a guiding question or name the next small step. Let them compile, test and try things themselves, and lead them to the right place with show_tutorial. Short general examples that do not solve the exercise itself are fine. In exercises you do not change files. Write code into a file only when the student explicitly asks for it and it is not an exercise. If someone explicitly asks for the solution after trying, you may show and explain it in the chat.`,
     explain: `Mode: explain. Explain fully and show code when it helps. With code, always say why it works, not only what it does. When the student wants you to write code, write it into their files with the tools. In exercises, explain every step of the solution instead of only writing it down, and leave the test classes as they are.`,
+    build: `Mode: build. The student describes what should exist (for example "Minecraft-like", "Snake", "calculator with a window", "a school library manager") and you build it completely in this project, right away. Ask no questions. Decide anything open sensibly yourself and name it in one sentence at the end. This replaces the rules above about proposals and short answers: in this mode you write straight into the files, and the student can undo everything with one click.
+
+How you work:
+1. Look with get_project at what exists. If the request builds on existing classes, read and extend them. Otherwise leave existing classes as they are and add new ones.
+2. Write a plan of at most five short lines (which classes, what for), then keep building without a pause.
+3. Create every class completely with create_class: finished, compiling code without TODOs, placeholders or left-out parts. Clean object orientation as taught in class: several classes with clear jobs, private fields, constructors, meaningful English names, short Javadoc comments on classes and important methods. Exactly one class has public static void main(String[] args) and starts the program.
+4. Compile. On errors read the messages, fix them with edit_file and compile again until everything compiles. Never stop with compiler errors.
+5. Plain Java without third-party libraries: java.util, javax.swing and java.awt yes, JavaFX no. Windows: JFrame inside SwingUtilities.invokeLater, setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE) (never EXIT_ON_CLOSE and never System.exit, that ends BlackJ's Java VM), fixed size or pack(), setLocationRelativeTo(null), setVisible(true), then requestFocusInWindow() on the panel that needs keys. Games run on javax.swing.Timer (about 60 frames per second), never Thread.sleep on the event thread. 3D works without OpenGL: isometric or raycasting in Graphics2D, antialiasing on.
+6. Make it really good: playable and good-looking, with the controls shown in the window, matching colours, a score or status, and sensible starting values. A complete, polished program beats a sketch.
+7. Console programs that end on their own you test with run_main. Window programs you do not start yourself: a button below your answer lets the student start them.
+
+At the end at most four short lines: what was built, which class starts it, the controls. No questions, no conclusion.`,
     limit: 'Step limit reached. Say in two short sentences what you did and what is still missing. No more tools.',
   },
 };
@@ -177,7 +209,8 @@ class Tutor {
     this.lang = lang === 'en' ? 'en' : 'de';
     this.lastContext = 0;
     const p = PROMPTS[this.lang];
-    this.system = p.base + '\n\n' + (mode === 'explain' ? p.explain : p.hints);
+    this.mode = MODES[mode] ? mode : 'hints';
+    this.system = p.base + '\n\n' + p[this.mode];
     this.messages = [];
     this.sentFiles.clear();
   }
@@ -271,6 +304,8 @@ class Tutor {
     this.abort = ac;
     this.busy = true;
     this.agent = agent;
+    // Limits follow the chat's mode, the same one its system prompt was written for.
+    const cfg = modeOf(this.mode);
     const turn = { tour: false };
     const total = { input: 0, output: 0, cost: 0 };
     let steps = stepBase;
@@ -280,12 +315,12 @@ class Tutor {
     let served = info.id;
     try {
       while (true) {
-        const wrapUp = steps - stepBase >= MAX_STEPS;
+        const wrapUp = steps - stepBase >= cfg.steps;
         steps++;
         emit('step', { n: steps });
         let final;
         try {
-          const stream = this.client().beta.messages.stream(this.params(info, msgs, wrapUp), { signal: ac.signal });
+          const stream = this.client().beta.messages.stream(this.params(info, msgs, wrapUp, cfg), { signal: ac.signal });
           this.stream = stream;
           streaming = steps;
           for await (const ev of stream) this.forward(ev, emit, steps);
@@ -309,13 +344,13 @@ class Tutor {
         this.lastContext = contextTokens(final.usage);
         stop = final.stop_reason;
         served = final.model;
-        const next = await this.handle(final, { turnId, msgs, base, fresh, emit, signal: ac.signal, wrapUp, step: steps, last: steps - stepBase === MAX_STEPS, turn });
+        const next = await this.handle(final, { turnId, msgs, base, fresh, emit, signal: ac.signal, wrapUp, step: steps, last: steps - stepBase === cfg.steps, turn });
         if (this.chatId !== chat) return;
         if (next === 'done') break;
       }
       emit('done', {
         stopReason: stop, model: served, usage: { input: total.input, output: total.output }, cost: total.cost, steps,
-        limit: steps - stepBase > MAX_STEPS, full: stop === 'model_context_window_exceeded' || this.lastContext > FULL_CHAT, long: this.lastContext > LONG_CHAT,
+        limit: steps - stepBase > cfg.steps, full: stop === 'model_context_window_exceeded' || this.lastContext > FULL_CHAT, long: this.lastContext > LONG_CHAT,
       });
     } catch (err) {
       if (this.chatId !== chat) return;
@@ -338,14 +373,16 @@ class Tutor {
     }
   }
 
-  params(info, msgs, wrapUp) {
+  params(info, msgs, wrapUp, cfg = MODES.hints) {
+    // Haiku takes effort up to high.
+    const effort = /haiku/.test(info.id) && (cfg.effort === 'xhigh' || cfg.effort === 'max') ? 'high' : cfg.effort;
     const params = {
       model: info.id,
-      max_tokens: MAX_TOKENS,
+      max_tokens: cfg.maxTokens,
       system: [{ type: 'text', text: this.system, cache_control: { type: 'ephemeral' } }],
       tools: TOOLS,
       messages: msgs,
-      output_config: { effort: 'medium' },
+      output_config: { effort },
       cache_control: { type: 'ephemeral' },
     };
     if (wrapUp) params.tool_choice = { type: 'none' };
@@ -580,4 +617,4 @@ function errorCode(err) {
   return 'unknown';
 }
 
-module.exports = { Tutor, MODELS, MAX_STEPS };
+module.exports = { Tutor, MODELS, MAX_STEPS, MODES };

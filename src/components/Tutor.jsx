@@ -8,7 +8,7 @@ import { api } from '../api.js';
 import monaco from '../lib/monaco.js';
 import { waitingForStudent } from '../agent.js';
 import Icon from './Icon.jsx';
-import { ToolRows, DiffCard, ContextChips, groupParts } from './AgentParts.jsx';
+import { ToolRows, DiffCard, ContextChips, BuildCard, groupParts } from './AgentParts.jsx';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -167,7 +167,7 @@ function Meta({ turn, t, lang, showCosts, last, waiting }) {
   return lines;
 }
 
-function Turn({ turn, t, lang, showCosts, last, proposals }) {
+function Turn({ turn, t, lang, showCosts, last, proposals, build }) {
   if (turn.role === 'user') {
     return (
       <div className="msg-user">
@@ -177,27 +177,39 @@ function Turn({ turn, t, lang, showCosts, last, proposals }) {
     );
   }
   const parts = turn.parts || [];
-  const groups = groupParts(parts);
+  const groups = groupParts(parts, { build });
   const running = ['waiting', 'thinking', 'working'].includes(turn.status);
   const lastPart = parts[parts.length - 1];
   const waiting = running && Object.values(proposals).some((p) => p.turnId === turn.id && p.status === 'pending');
   return (
     <div className="msg-ai">
-      {running && !parts.length && <div className="msg-meta">{t('tutor.thinking')}</div>}
+      {running && !parts.length && <div className="msg-meta">{t(build ? 'build.starting' : 'tutor.thinking')}</div>}
       {groups.map((g) => {
         if (g.type === 'text') return g.text ? <Markdown key={g.key} text={g.text} final={!running} t={t} /> : null;
-        if (g.type === 'tools') return <ToolRows key={g.key} parts={g.parts} turnId={turn.id} />;
+        if (g.type === 'tools') return <ToolRows key={g.key} parts={g.parts} turnId={turn.id} tail={build && running} />;
         if (g.type === 'diff') return <DiffCard key={g.key} id={g.proposalId} />;
         return null;
       })}
       {turn.status === 'working' && lastPart && lastPart.type === 'text' && <span className="cursor-blink" aria-hidden="true" />}
+      {build && !running && <BuildCard turnId={turn.id} />}
       <Meta turn={turn} t={t} lang={lang} showCosts={showCosts} last={last} waiting={waiting} />
     </div>
   );
 }
 
 /** Up to three ways to start, the ones that fit what is open right now. */
-function Starters({ send, t }) {
+function Starters({ send, t, build }) {
+  if (build) {
+    return (
+      <div className="quick">
+        {['build.idea.blocks', 'build.idea.snake', 'build.idea.calc', 'build.idea.library'].map((k) => <button key={k} onClick={() => send(t(k))}>{t(k)}</button>)}
+      </div>
+    );
+  }
+  return <TutorStarters send={send} t={t} />;
+}
+
+function TutorStarters({ send, t }) {
   const compileState = useStore((s) => s.compile.state);
   const exception = useStore((s) => !!s.exception);
   const exercise = useStore((s) => s.project && s.project.exercise && !(s.settings.exercisesDone || []).includes(s.project.exercise));
@@ -230,6 +242,7 @@ export default function Tutor() {
   const inputRef = useRef(null);
   const model = models.find((m) => m.id === settings.model);
   const pendingOnly = chat.busy && waitingForStudent();
+  const build = chat.mode === 'build';
 
   useEffect(() => {
     const el = listRef.current;
@@ -263,7 +276,7 @@ export default function Tutor() {
       {hasKey && (
       <div className="tutor-sub">
         <div className="seg" role="group" aria-label={t('a11y.mode')} data-tour="tutor-mode">
-          {['hints', 'explain'].map((m) => (
+          {['hints', 'explain', 'build'].map((m) => (
             <button key={m} aria-pressed={chat.mode === m} onClick={() => chat.mode !== m && A.setTutorMode(m)}>{t('tutor.mode.' + m)}</button>
           ))}
         </div>
@@ -281,12 +294,13 @@ export default function Tutor() {
           <div className="chat" ref={listRef}>
             {chat.turns.length === 0 && (
               <>
+                {build && <h3 className="build-title">{t('build.title')}</h3>}
                 <p className="muted">{t('tutor.empty.' + chat.mode)}</p>
-                <Starters send={send} t={t} />
+                <Starters send={send} t={t} build={build} />
               </>
             )}
             {chat.turns.map((turn, i) => (
-              <Turn key={turn.id} turn={turn} t={t} lang={settings.lang} showCosts={settings.showCosts} last={i === chat.turns.length - 1} proposals={proposals} />
+              <Turn key={turn.id} turn={turn} t={t} lang={settings.lang} showCosts={settings.showCosts} last={i === chat.turns.length - 1} proposals={proposals} build={build} />
             ))}
           </div>
           <form
@@ -311,8 +325,8 @@ export default function Tutor() {
                       send();
                     }
                   }}
-                  placeholder={t('tutor.placeholder')}
-                  aria-label={t('tutor.placeholder')}
+                  placeholder={t(build ? 'build.placeholder' : 'tutor.placeholder')}
+                  aria-label={t(build ? 'build.placeholder' : 'tutor.placeholder')}
                 />
                 {chat.busy && !(pendingOnly && text.trim()) ? (
                   <button type="button" className="send-btn stop" onClick={A.stopTutor} aria-label={t('tutor.stop')} title={t('tutor.stop')}>

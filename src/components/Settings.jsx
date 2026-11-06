@@ -185,7 +185,7 @@ export default function Settings() {
               </Row>
               <Row title={t('settings.mode')}>
                 <div className="seg">
-                  {['hints', 'explain'].map((v) => (
+                  {['hints', 'explain', 'build'].map((v) => (
                     <button key={v} aria-pressed={s.tutorMode === v} onClick={() => set({ tutorMode: v })}>{t('tutor.mode.' + v)}</button>
                   ))}
                 </div>

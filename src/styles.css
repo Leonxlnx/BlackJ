@@ -796,6 +796,19 @@ button.doc-sig:hover { text-decoration: underline; text-decoration-color: var(--
 .agent-diff-foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rule); font-size: 12px; color: var(--muted); }
 .agent-diff-foot .grow { flex: 1; }
 .agent-diff-foot .link { font-size: 12px; color: var(--text-2); }
+.build-title { margin: 4px 0 6px; font-size: 17px; line-height: 24px; font-weight: 600; }
+.build-card { background: var(--inset); border: 1px solid var(--rule); border-radius: var(--r-lg); overflow: hidden; margin: 8px 0 4px; }
+.build-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; font-size: 12px; }
+.build-head .name { font-size: 13px; font-weight: 500; margin-right: auto; }
+.build-files { display: flex; flex-direction: column; padding: 0 4px 6px; }
+.build-file { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 4px 8px; background: none; border: 0; font: inherit; cursor: pointer; border-radius: var(--r-sm); font-size: 13px; line-height: 20px; text-align: left; color: var(--text); }
+.build-file:hover:not(:disabled) { background: var(--raised); }
+.build-file:disabled { color: var(--muted); text-decoration: line-through; }
+.build-file .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.build-file .tag, .build-file .stat { font-size: 12px; color: var(--muted); }
+.build-file .stat { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.build-foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rule); }
+.build-foot .grow { flex: 1; }
 .proposal-bar { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--rule); font-size: 13px; color: var(--text-2); flex: none; }
 .proposal-bar.quiet { height: 32px; color: var(--muted); font-size: 12px; }
 .proposal-bar.quiet .link { font-size: 12px; }

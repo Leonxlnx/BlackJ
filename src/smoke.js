@@ -759,6 +759,30 @@ export async function runSmoke() {
     await A.removeRelation('Sparkonto', 'Verzinsbar');
     if (!/class Sparkonto \{/.test(content())) throw new Error(content());
   });
+  await step('build mode: plans, writes classes, fixes the compile error, starts, undoes everything', async () => {
+    await A.setApiKey('sk-ant-smoke', false);
+    A.setTutorMode('build');
+    setState({ tutorOpen: true, side: 'tutor' });
+    await until(() => document.querySelector('.build-title'), 3000, 'build empty state');
+    await shot('39-build-empty');
+    A.askTutor('Baue ein Würfelspiel mit drei Würfen');
+    await until(() => !getState().chat.busy, 30000, 'build did not end');
+    const turn = getState().chat.turns[getState().chat.turns.length - 1];
+    const names = turn.parts.filter((p) => p.type === 'tool').map((p) => p.name + ':' + p.status);
+    if (names.filter((n) => n === 'compile:done').length !== 2) throw new Error('compiles: ' + names.join(' '));
+    if (!getState().files['Wuerfel.java'] || !getState().files['Spiel.java'].content.includes('wuerfel.werfen()')) throw new Error('classes not written');
+    if (getState().compile.state !== 'ok') throw new Error('compile ' + getState().compile.state);
+    if (document.querySelector('.agent-diff')) throw new Error('build shows diff cards');
+    await until(() => document.querySelector('.build-card [data-tour="build-run"]'), 5000, 'no build card');
+    if (document.querySelectorAll('.build-file').length !== 2) throw new Error('build files ' + document.querySelectorAll('.build-file').length);
+    await shot('39b-build-done');
+    document.querySelector('.build-card [data-tour="build-run"]').click();
+    await until(() => getState().console.some((l) => l.text.includes('Summe:')), 15000, 'program did not run');
+    [...document.querySelectorAll('.build-foot .btn-quiet')].pop().click();
+    await until(() => !getState().files['Wuerfel.java'] && !getState().files['Spiel.java'], 10000, 'undo all');
+    await until(() => document.querySelector('.build-card[data-status="undone"]'), 3000, 'card not undone');
+    A.setTutorMode('hints');
+  });
   await step('home with recent projects', async () => {
     A.go('home');
     await until(() => document.querySelectorAll('.recent-tile').length >= 1);

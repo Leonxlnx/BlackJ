@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('blackj', {
     reset: invoke('bench:reset'),
     onOut: listen('bench:out'),
     onState: listen('bench:state'),
+    onWindow: listen('bench:window'),
   },
   ai: {
     status: invoke('ai:status'),

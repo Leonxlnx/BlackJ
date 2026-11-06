@@ -91,6 +91,9 @@ public class BlackJBench {
         }, "blackj-flush");
         flusher.setDaemon(true);
         flusher.start();
+        Thread windows = new Thread(BlackJBench::watchWindows, "blackj-windows");
+        windows.setDaemon(true);
+        windows.start();
 
         // args[0]: the compiled classes first, then libraries (+libs jars, JUnit), path-separator separated.
         classpath = args.length > 0 ? args[0] : ".";
@@ -116,6 +119,58 @@ public class BlackJBench {
             handleLine(line);
         }
         System.exit(0);
+    }
+
+    // ------------------------------------------------------------------ the student's windows
+
+    /**
+     * A window the student's program opens comes to the front once. BlackJ's own window is in
+     * front, and Windows puts a new window of a background process behind it, so a game or a
+     * JOptionPane looked as if it never opened. AWT is touched only after the program started it.
+     */
+    static void watchWindows() {
+        while (true) {
+            try { Thread.sleep(150); } catch (InterruptedException e) { return; }
+            if (!awtRunning()) continue;
+            try { Front.check(); } catch (Throwable ignored) { /* a window went away meanwhile */ }
+        }
+    }
+
+    static boolean awtRunning() {
+        ThreadGroup g = Thread.currentThread().getThreadGroup();
+        while (g.getParent() != null) g = g.getParent();
+        Thread[] all = new Thread[g.activeCount() + 16];
+        int n = g.enumerate(all, true);
+        for (int i = 0; i < n; i++) if (all[i] != null && all[i].getName().startsWith("AWT-EventQueue")) return true;
+        return false;
+    }
+
+    /** Separate class, so java.awt is loaded only when the student's program uses it. */
+    static final class Front {
+        static final Set<java.awt.Window> seen = java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+
+        static void check() {
+            for (java.awt.Window w : java.awt.Window.getWindows()) {
+                if (!w.isShowing() || seen.contains(w)) continue;
+                seen.add(w);
+                java.awt.EventQueue.invokeLater(() -> {
+                    boolean top = w.isAlwaysOnTop();
+                    w.setAlwaysOnTop(true);
+                    w.toFront();
+                    w.requestFocus();
+                    if (top) return;
+                    // Topmost only for a moment: afterwards it is simply the front window.
+                    javax.swing.Timer t = new javax.swing.Timer(400, e -> w.setAlwaysOnTop(false));
+                    t.setRepeats(false);
+                    t.start();
+                });
+                String title = w instanceof java.awt.Frame ? ((java.awt.Frame) w).getTitle() : w instanceof java.awt.Dialog ? ((java.awt.Dialog) w).getTitle() : "";
+                Map<String, Object> ev = new LinkedHashMap<>();
+                ev.put("event", "window");
+                ev.put("title", title == null ? "" : title);
+                send(ev);
+            }
+        }
     }
 
     // ------------------------------------------------------------------ dispatch

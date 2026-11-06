@@ -78,6 +78,7 @@
 - KI-Tutor im Modus *Tipps* (hilft dir, selbst auf die Lösung zu kommen) oder *Erklären*
 - Der Tutor arbeitet wie ein Agent: Er sieht dein Projekt, liest Dateien, kompiliert, führt Tests aus und schlägt Änderungen als Vergleich vor (oder schreibt sie selbst, wenn du das erlaubst)
 - Tutorials direkt in BlackJ: Der Tutor zieht einen Ring um den Knopf, den du drücken musst („Hier klicken“)
+- Modus *Bauen*: Beschreib ein Programm („Snake“, „Minecraft-artig“), und der Tutor plant, schreibt alle Klassen, kompiliert und behebt Fehler ohne Rückfragen. Danach: Starten oder alles rückgängig machen
 - KI-Vorschläge beim Tippen (grauer Text, `Tab` übernimmt)
 - `Strg+I`: „Mit KI schreiben“ – Änderung erscheint als Vergleich, du entscheidest
 - „Mit KI beheben“ bei Compilerfehlern

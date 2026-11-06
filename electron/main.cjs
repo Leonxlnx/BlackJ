@@ -109,6 +109,7 @@ bench.on('running', (m) => {
   flushOut();
   send('bench:state', { state: m.running ? 'running' : 'idle' });
 });
+bench.on('window', (m) => send('bench:window', { title: String(m.title || '') }));
 bench.on('waitingForInput', () => {
   flushOut();
   send('bench:state', { state: 'waiting' });

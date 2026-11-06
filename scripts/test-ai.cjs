@@ -435,6 +435,23 @@ const AGENT = { mode: 'explain', exercise: false, testFiles: [], readCode: true,
     console.log('  ok   tutorial targets: the window and the main process share one grammar');
   }
 
+  {
+    reset();
+    const { tutor: b } = make();
+    b.newChat({ lang: 'de', mode: 'build' });
+    await b.send({ text: 'Baue Snake', model: MODEL, lang: 'de', mode: 'build', turnId: 'tb', agent: { ...AGENT, mode: 'build' } });
+    const rb = requests[0];
+    assert.deepStrictEqual(rb.body.output_config, { effort: 'xhigh' });
+    assert.strictEqual(rb.body.max_tokens, 64000);
+    assert.ok(sys(rb.body).includes('Modus: Bauen') && !sys(rb.body).includes('Modus: Tipps'));
+    reset();
+    const { tutor: h } = make();
+    h.newChat({ lang: 'de', mode: 'build' });
+    await h.send({ text: 'Baue Snake', model: 'claude-haiku-5-5', lang: 'de', mode: 'build', turnId: 'th', agent: { ...AGENT, mode: 'build' } });
+    assert.deepStrictEqual(requests[0].body.output_config, { effort: 'high' });
+    console.log('  ok   build mode: its own prompt, xhigh effort (high on Haiku), room for long files');
+  }
+
   fs.rmSync(dir, { recursive: true, force: true });
   console.log('\nall AI checks passed');
 })().catch((e) => {

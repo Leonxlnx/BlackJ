@@ -71,6 +71,17 @@ function script(body) {
     }
     return { text: 'Dein Objekt erscheint dann unten auf der Objektbank.' };
   }
+  if (question.startsWith('Baue ein Würfelspiel')) {
+    // Build mode: plan, two classes at once, a compile error, the fix, a clean compile, the summary.
+    const wuerfel = '/** Ein Würfel mit sechs Seiten. */\npublic class Wuerfel {\n    private int augen;\n\n    /** Würfelt und gibt die Augenzahl zurück. */\n    public int werfen() {\n        augen = (int) (Math.random() * 6) + 1;\n        return augen;\n    }\n}\n';
+    const spiel = '/** Drei Würfe, die Summe zählt. */\npublic class Spiel {\n    public static void main(String[] args) {\n        Wuerfel wuerfel = new Wuerfel();\n        int summe = 0;\n        for (int i = 1; i <= 3; i++) {\n            int wurf = wuerfel.werfen2();\n            System.out.println("Wurf " + i + ": " + wurf);\n            summe += wurf;\n        }\n        System.out.println("Summe: " + summe);\n    }\n}\n';
+    if (step === 0) return { text: 'Plan:\n- `Wuerfel` würfelt\n- `Spiel` startet drei Würfe', tools: [{ name: 'get_project', input: {} }] };
+    if (step === 1) return { tools: [{ name: 'create_class', input: { name: 'Wuerfel', content: wuerfel } }, { name: 'create_class', input: { name: 'Spiel', content: spiel } }] };
+    if (step === 2) return { tools: [{ name: 'compile', input: {} }] };
+    if (step === 3) return /"ok":false/.test(last) ? { tools: [{ name: 'edit_file', input: { path: 'Spiel.java', old_text: 'wuerfel.werfen2()', new_text: 'wuerfel.werfen()' } }] } : { text: 'Fertig.' };
+    if (step === 4) return { tools: [{ name: 'compile', input: {} }] };
+    return { text: 'Gebaut: ein Würfelspiel mit drei Würfen.\nStarten: `Spiel`.' };
+  }
   return { text: 'Okay.' };
 }
 
