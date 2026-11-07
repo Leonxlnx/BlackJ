@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk').default;
-const { TOOLS, validateToolInput, checkPolicy, truncate } = require('./agent-tools.cjs');
+const { TOOLS, validateToolInput, checkPolicy, truncate, WRITE } = require('./agent-tools.cjs');
 
 const MODELS = [
   { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', input: 4, output: 20, cacheRead: 0.2, fallbacks: true },
@@ -21,13 +21,16 @@ const MAX_TOKENS = 32000;
 // many rounds of writing and compiling, so that mode gets room and the most careful effort.
 const MODES = {
   hints: { steps: MAX_STEPS, effort: 'medium', maxTokens: MAX_TOKENS },
-  explain: { steps: 20, effort: 'high', maxTokens: MAX_TOKENS },
-  build: { steps: 40, effort: 'xhigh', maxTokens: 64000 },
+  explain: { steps: 25, effort: 'high', maxTokens: MAX_TOKENS },
+  // high, not xhigh: on a huge request xhigh could spend a whole step thinking and write nothing.
+  build: { steps: 80, effort: 'high', maxTokens: 64000 },
 };
 const modeOf = (m) => MODES[m] || MODES.hints;
 const JSON_RETRIES = 2;        // re-issues of one step whose tool input JSON the SDK could not parse
-const LONG_CHAT = 120000;      // input tokens: the window suggests a new chat
-const FULL_CHAT = 400000;      // input tokens: send() refuses, a new chat is needed
+const LONG_CHAT = 300000;      // input tokens: the window suggests a new chat
+const FULL_CHAT = 850000;      // input tokens: send() refuses, a new chat is needed
+const EMPTY_RETRIES = 2;       // steps in a row that only thought (no text, no tool) before the turn gives up
+const NUDGES = 4;              // times a build is sent back to work because it stopped too early
 
 const PROMPTS = {
   de: {
@@ -52,10 +55,15 @@ So gehst du vor:
 3. Lege jede Klasse mit create_class vollständig an: fertiger, kompilierbarer Code ohne TODOs, Platzhalter oder ausgelassene Teile. Saubere Objektorientierung wie im Unterricht: mehrere Klassen mit klaren Aufgaben, private Attribute, Konstruktoren, sprechende deutsche Bezeichner, kurze Javadoc-Kommentare über Klassen und wichtigen Methoden. Genau eine Klasse hat public static void main(String[] args) und startet das Programm.
 4. Kompiliere. Bei Fehlern liest du die Meldungen, korrigierst mit edit_file und kompilierst erneut, bis alles fehlerfrei ist. Hör nie mit Compilerfehlern auf.
 5. Nur Java ohne fremde Bibliotheken: java.util, javax.swing und java.awt ja, JavaFX nein. Fenster: JFrame in SwingUtilities.invokeLater, setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE) (nie EXIT_ON_CLOSE und nie System.exit, das beendet die Java-VM von BlackJ), feste Größe oder pack(), setLocationRelativeTo(null), setVisible(true), danach requestFocusInWindow() auf dem Panel, das Tasten braucht. Spiele laufen mit javax.swing.Timer (etwa 60 Bilder pro Sekunde), nie mit Thread.sleep im Event-Thread. 3D geht ohne OpenGL: isometrisch oder mit Raycasting in Graphics2D, Antialiasing an.
-6. Mach es richtig gut: spielbar und schön, mit Steuerungshinweis im Fenster, stimmigen Farben, Punkten oder Status und sinnvollen Startwerten. Lieber ein vollständiges, poliertes Programm als eine Skizze.
+6. Mach es richtig gut: spielbar und schön, mit Steuerungshinweis im Fenster, stimmigen Farben, Punkten oder Status und sinnvollen Startwerten. Jedes Fenster bekommt ein eigenes Symbol für die Taskleiste: zeichne es mit einem BufferedImage (zum Beispiel einen Grasblock oder eine Schlange) in 16, 32 und 64 Pixeln und setze es mit setIconImages. Lieber ein vollständiges, poliertes Programm als eine Skizze.
 7. Konsolenprogramme, die von selbst enden, testest du mit run_main. Fensterprogramme startest du nicht selbst: Unter deiner Antwort erscheint ein Knopf, mit dem die Person sie startet.
+8. Große Wünsche (ein ganzes Spiel mit vielen Teilen) baust du in Etappen wie ein erfahrener Entwickler: zuerst ein spielbarer Kern, der kompiliert, dann ein Teil nach dem anderen, nach jedem Teil kompilieren. Halte jede Klasse unter etwa 400 Zeilen und verteile große Programme auf viele Klassen. Denk kurz nach und schreib dann Code; lange Überlegungen ohne Werkzeug bringen nichts. Hör erst auf, wenn alles Gewünschte eingebaut ist und fehlerfrei kompiliert.
 
 Zum Schluss höchstens vier kurze Zeilen: was gebaut wurde, welche Klasse startet, die Steuerung. Keine Fragen, kein Fazit.`,
+    empty: 'Du hast nur nachgedacht und nichts geschrieben. Fang jetzt an: höchstens ein Satz, dann das nächste Werkzeug. Bei großen Aufgaben in kleinen Schritten, eine Klasse nach der anderen.',
+    nudgeNothing: 'Es ist noch nichts gebaut. Kein Plan ohne Code: Lege jetzt die Klassen mit create_class an und kompiliere.',
+    nudgeCompile: 'Seit deiner letzten Änderung wurde nicht fehlerfrei kompiliert. Kompiliere und behebe alle Fehler, bevor du aufhörst.',
+    nudgeQuestion: 'Keine Rückfragen im Modus Bauen. Entscheide selbst sinnvoll und bau weiter, bis alles Gewünschte fertig ist und kompiliert.',
     limit: 'Schrittlimit erreicht. Sag in zwei kurzen Sätzen, was du gemacht hast und was noch fehlt. Keine Werkzeuge mehr.',
   },
   en: {
@@ -80,10 +88,15 @@ How you work:
 3. Create every class completely with create_class: finished, compiling code without TODOs, placeholders or left-out parts. Clean object orientation as taught in class: several classes with clear jobs, private fields, constructors, meaningful English names, short Javadoc comments on classes and important methods. Exactly one class has public static void main(String[] args) and starts the program.
 4. Compile. On errors read the messages, fix them with edit_file and compile again until everything compiles. Never stop with compiler errors.
 5. Plain Java without third-party libraries: java.util, javax.swing and java.awt yes, JavaFX no. Windows: JFrame inside SwingUtilities.invokeLater, setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE) (never EXIT_ON_CLOSE and never System.exit, that ends BlackJ's Java VM), fixed size or pack(), setLocationRelativeTo(null), setVisible(true), then requestFocusInWindow() on the panel that needs keys. Games run on javax.swing.Timer (about 60 frames per second), never Thread.sleep on the event thread. 3D works without OpenGL: isometric or raycasting in Graphics2D, antialiasing on.
-6. Make it really good: playable and good-looking, with the controls shown in the window, matching colours, a score or status, and sensible starting values. A complete, polished program beats a sketch.
+6. Make it really good: playable and good-looking, with the controls shown in the window, matching colours, a score or status, and sensible starting values. Every window gets its own taskbar icon: draw it into a BufferedImage (for example a grass block or a snake) at 16, 32 and 64 pixels and set it with setIconImages. A complete, polished program beats a sketch.
 7. Console programs that end on their own you test with run_main. Window programs you do not start yourself: a button below your answer lets the student start them.
+8. Build big requests (a whole game with many parts) in stages like an experienced developer: first a playable core that compiles, then one part after another, compiling after each. Keep every class under about 400 lines and spread big programs over many classes. Think briefly, then write code; long thinking without a tool achieves nothing. Stop only when everything asked for is in and compiles.
 
 At the end at most four short lines: what was built, which class starts it, the controls. No questions, no conclusion.`,
+    empty: 'You only thought and wrote nothing. Start now: one sentence at most, then the next tool. Big tasks in small steps, one class after another.',
+    nudgeNothing: 'Nothing is built yet. No plan without code: create the classes with create_class now and compile.',
+    nudgeCompile: 'Nothing compiled cleanly since your last change. Compile and fix every error before you stop.',
+    nudgeQuestion: 'No questions back in build mode. Decide sensibly yourself and keep building until everything asked for is done and compiles.',
     limit: 'Step limit reached. Say in two short sentences what you did and what is still missing. No more tools.',
   },
 };
@@ -306,7 +319,7 @@ class Tutor {
     this.agent = agent;
     // Limits follow the chat's mode, the same one its system prompt was written for.
     const cfg = modeOf(this.mode);
-    const turn = { tour: false };
+    const turn = { tour: false, empty: 0, nudges: 0, wrote: false, dirty: false, silent: false };
     const total = { input: 0, output: 0, cost: 0 };
     let steps = stepBase;
     let jsonRetries = 0;
@@ -350,7 +363,7 @@ class Tutor {
       }
       emit('done', {
         stopReason: stop, model: served, usage: { input: total.input, output: total.output }, cost: total.cost, steps,
-        limit: steps - stepBase > cfg.steps, full: stop === 'model_context_window_exceeded' || this.lastContext > FULL_CHAT, long: this.lastContext > LONG_CHAT,
+        limit: steps - stepBase > cfg.steps, empty: turn.silent, full: stop === 'model_context_window_exceeded' || this.lastContext > FULL_CHAT, long: this.lastContext > LONG_CHAT,
       });
     } catch (err) {
       if (this.chatId !== chat) return;
@@ -427,9 +440,34 @@ class Tutor {
         msgs.push({ role: 'assistant', content });
         return 'again';
       }
-      // Only thinking (cut off by max_tokens, perhaps without its signature) is not worth keeping:
-      // the history is append-only, and a message the API rejects would break every later send.
-      if (content.some((b) => b.type === 'text' || b.type === 'tool_use')) msgs.push({ role: 'assistant', content });
+      const said = content.some((b) => b.type === 'text' && b.text.trim());
+      if (!said) {
+        // Only thinking (often cut off by max_tokens, perhaps without its signature). It is not kept:
+        // the history is append-only, and a message the API rejects would break every later send.
+        // Ending here would look as if the tutor gave up, so the step runs again with a short push.
+        const lastUser = msgs[msgs.length - 1];
+        if (!wrapUp && turn.empty < EMPTY_RETRIES && lastUser && lastUser.role === 'user' && Array.isArray(lastUser.content)) {
+          turn.empty++;
+          emit('discard', { step });
+          lastUser.content = [...lastUser.content, { type: 'text', text: PROMPTS[this.lang].empty }];
+          return 'again';
+        }
+        turn.silent = true;
+        return 'done';
+      }
+      turn.empty = 0;
+      msgs.push({ role: 'assistant', content });
+      // Build mode works until something is built and compiles, and never ends on a question back.
+      if (this.mode === 'build' && !wrapUp && turn.nudges < NUDGES) {
+        const p = PROMPTS[this.lang];
+        const text = content.filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+        const nudge = !turn.wrote ? p.nudgeNothing : turn.dirty ? p.nudgeCompile : /\?\s*$/.test(text) ? p.nudgeQuestion : null;
+        if (nudge) {
+          turn.nudges++;
+          msgs.push({ role: 'user', content: [{ type: 'text', text: nudge }] });
+          return 'again';
+        }
+      }
       return 'done';
     }
 
@@ -495,6 +533,8 @@ class Tutor {
         continue;
       }
       result(call, r && r.content != null ? r.content : '', r && r.isError);
+      if (WRITE.has(call.name) && !(r && r.isError)) turn.wrote = turn.dirty = true;
+      if (call.name === 'compile') turn.dirty = !(r && /"ok":\s*true/.test(String(r.content)));
       if (!(r && r.isError) && (call.name === 'show_tutorial' || call.name === 'point_at')) turn.tour = true;
     }
     if (cancelled.length) {

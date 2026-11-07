@@ -118,9 +118,37 @@ function Setup() {
   );
 }
 
-function Meta({ turn, t, lang, showCosts, last, waiting }) {
+/** While a turn runs: what the tutor does right now, which step, and for how long. */
+function LiveStatus({ turn, t, build }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.max(0, Math.round((Date.now() - (turn.startedAt || Date.now())) / 1000));
+  const time = secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} min`;
+  const what = turn.phase === 'thinking' || !turn.phase ? t(build && !(turn.parts || []).length ? 'build.starting' : 'agent.live.thinking') : turn.phase === 'tool' ? t('agent.live.tool') : t('agent.live.writing');
+  return (
+    <div className="msg-meta live-status" role="status">
+      <span className="live-dot" aria-hidden="true" />
+      {what}
+      {turn.step > 1 && <span> · {t('agent.live.step', { n: turn.step })}</span>}
+      <span> · {time}</span>
+    </div>
+  );
+}
+
+function Meta({ turn, t, lang, showCosts, last, waiting, build }) {
   const lines = [];
   if (waiting) lines.push(<div key="w" className="msg-meta">{t('agent.waiting')}</div>);
+  if (turn.status === 'done' && (turn.empty || !(turn.parts || []).some((p) => (p.type === 'text' && p.text.trim()) || p.type !== 'text'))) {
+    lines.push(
+      <div key="n" className="msg-meta msg-error">
+        {t('agent.empty')}{' '}
+        {last && <button className="link" onClick={A.retryLast}>{t('tutor.retry')}</button>}
+      </div>,
+    );
+  }
   if (turn.status === 'aborted') lines.push(<div key="a" className="msg-meta">{t('tutor.aborted')}</div>);
   if (turn.status === 'refusal') lines.push(<div key="r" className="msg-meta">{t('tutor.refusal')}</div>);
   if (turn.status === 'error') {
@@ -145,10 +173,17 @@ function Meta({ turn, t, lang, showCosts, last, waiting }) {
   }
   if (turn.status === 'done' && turn.limit) {
     lines.push(
-      <div key="l" className="msg-meta">
-        {t('agent.limit')}{' '}
-        {last && <button className="link" onClick={() => A.askTutor(t('tutor.continuePrompt'))}>{t('agent.continue')}</button>}
-      </div>,
+      build && last ? (
+        <div key="l" className="build-more">
+          <span className="msg-meta">{t('build.limit')}</span>
+          <button className="btn btn-sm btn-primary" onClick={() => A.askTutor(t('build.continuePrompt'))}>{t('build.continue')}</button>
+        </div>
+      ) : (
+        <div key="l" className="msg-meta">
+          {t('agent.limit')}{' '}
+          {last && <button className="link" onClick={() => A.askTutor(t('tutor.continuePrompt'))}>{t('agent.continue')}</button>}
+        </div>
+      ),
     );
   }
   if (turn.status === 'done' && (turn.long || turn.full) && last) {
@@ -183,7 +218,6 @@ function Turn({ turn, t, lang, showCosts, last, proposals, build }) {
   const waiting = running && Object.values(proposals).some((p) => p.turnId === turn.id && p.status === 'pending');
   return (
     <div className="msg-ai">
-      {running && !parts.length && <div className="msg-meta">{t(build ? 'build.starting' : 'tutor.thinking')}</div>}
       {groups.map((g) => {
         if (g.type === 'text') return g.text ? <Markdown key={g.key} text={g.text} final={!running} t={t} /> : null;
         if (g.type === 'tools') return <ToolRows key={g.key} parts={g.parts} turnId={turn.id} tail={build && running} />;
@@ -191,8 +225,9 @@ function Turn({ turn, t, lang, showCosts, last, proposals, build }) {
         return null;
       })}
       {turn.status === 'working' && lastPart && lastPart.type === 'text' && <span className="cursor-blink" aria-hidden="true" />}
+      {running && !waiting && <LiveStatus turn={turn} t={t} build={build} />}
       {build && !running && <BuildCard turnId={turn.id} />}
-      <Meta turn={turn} t={t} lang={lang} showCosts={showCosts} last={last} waiting={waiting} />
+      <Meta turn={turn} t={t} lang={lang} showCosts={showCosts} last={last} waiting={waiting} build={build} />
     </div>
   );
 }

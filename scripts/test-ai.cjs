@@ -410,7 +410,7 @@ const AGENT = { mode: 'explain', exercise: false, testFiles: [], readCode: true,
     assert.strictEqual(calls.length, 0);
     assert.strictEqual(of(ev, 'a15').find((x) => x.type === 'done').full, true);
     assert.ok(historyValid(tu.messages));
-    tu.lastContext = 500000;
+    tu.lastContext = 900000;
     await assert.rejects(() => ask(tu, 'Mehr', 'a15b'), (x) => x.code === 'chatFull');
     console.log('  ok   full context: nothing runs, a full chat refuses new messages');
   }
@@ -441,7 +441,7 @@ const AGENT = { mode: 'explain', exercise: false, testFiles: [], readCode: true,
     b.newChat({ lang: 'de', mode: 'build' });
     await b.send({ text: 'Baue Snake', model: MODEL, lang: 'de', mode: 'build', turnId: 'tb', agent: { ...AGENT, mode: 'build' } });
     const rb = requests[0];
-    assert.deepStrictEqual(rb.body.output_config, { effort: 'xhigh' });
+    assert.deepStrictEqual(rb.body.output_config, { effort: 'high' });
     assert.strictEqual(rb.body.max_tokens, 64000);
     assert.ok(sys(rb.body).includes('Modus: Bauen') && !sys(rb.body).includes('Modus: Tipps'));
     reset();
@@ -449,7 +449,52 @@ const AGENT = { mode: 'explain', exercise: false, testFiles: [], readCode: true,
     h.newChat({ lang: 'de', mode: 'build' });
     await h.send({ text: 'Baue Snake', model: 'claude-haiku-5-5', lang: 'de', mode: 'build', turnId: 'th', agent: { ...AGENT, mode: 'build' } });
     assert.deepStrictEqual(requests[0].body.output_config, { effort: 'high' });
-    console.log('  ok   build mode: its own prompt, xhigh effort (high on Haiku), room for long files');
+    console.log('  ok   build mode: its own prompt, high effort, room for long files');
+  }
+
+  {
+    // A step that only thinks (cut off by max_tokens) runs again with a push instead of ending silently.
+    reset();
+    const { tutor: e, events: ev } = make();
+    queue.push(message([{ type: 'thinking' }], 'max_tokens'), answer('Hallo zurück'));
+    await e.send({ text: 'Hallo', model: MODEL, lang: 'de', mode: 'hints', turnId: 'te', agent: AGENT });
+    assert.strictEqual(requests.length, 2);
+    const lastQ = requests[1].body.messages[requests[1].body.messages.length - 1];
+    assert.ok(lastQ.role === 'user' && lastQ.content.some((b) => b.type === 'text' && b.text.startsWith('Du hast nur nachgedacht')));
+    const done = ev.find((x) => x.type === 'done');
+    assert.ok(done && !done.empty);
+    assert.ok(historyValid(e.messages) && e.messages[e.messages.length - 1].role === 'assistant');
+    // Only thinking, again and again: the turn ends and says so.
+    reset();
+    const { tutor: e2, events: ev2 } = make();
+    for (let i = 0; i < 5; i++) queue.push(message([{ type: 'thinking' }], 'max_tokens'));
+    await e2.send({ text: 'Hallo', model: MODEL, lang: 'de', mode: 'hints', turnId: 'te2', agent: AGENT });
+    assert.strictEqual(requests.length, 3);
+    assert.ok(ev2.find((x) => x.type === 'done').empty);
+    console.log('  ok   a step that only thinks is retried with a push; endless thinking ends visibly');
+  }
+
+  {
+    // Build mode: a plan without code, then code without a clean compile, both go back to work.
+    reset();
+    toolImpl = async (call) => ({ content: call.name === 'compile' ? '{"ok":true,"ms":120}' : '{"status":"applied","file":"Spiel.java"}' });
+    const { tutor: b } = make();
+    b.newChat({ lang: 'de', mode: 'build' });
+    queue.push(
+      answer('Plan: eine Klasse Spiel.'),
+      toolUse('tu_b1', 'create_class', { name: 'Spiel', content: 'public class Spiel {\n}\n' }),
+      answer('Fertig gebaut.'),
+      toolUse('tu_b2', 'compile', {}),
+      answer('Gebaut und kompiliert.'),
+    );
+    await b.send({ text: 'Baue ein Spiel', model: MODEL, lang: 'de', mode: 'build', turnId: 'tbn', agent: { ...AGENT, mode: 'build' } });
+    assert.strictEqual(requests.length, 5);
+    const texts = (i) => requests[i].body.messages[requests[i].body.messages.length - 1].content.map((x) => x.text || '').join('');
+    assert.ok(texts(1).startsWith('Es ist noch nichts gebaut'));
+    assert.ok(texts(3).startsWith('Seit deiner letzten Änderung'));
+    assert.deepStrictEqual(calls.map((c) => c.name), ['create_class', 'compile']);
+    assert.ok(historyValid(b.messages));
+    console.log('  ok   build mode keeps working until something is built and compiles');
   }
 
   fs.rmSync(dir, { recursive: true, force: true });

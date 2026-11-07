@@ -1249,7 +1249,7 @@ export async function askTutor(text) {
   const ctxLabel = context && context.file ? simpleName(s.files[context.file].className) + '.java' : null;
   Agent.startTurn(s.project ? s.project.dir : null);
   setState((st) => ({
-    chat: { ...st.chat, busy: true, notes: [], turns: [...st.chat.turns, { id: turnId + 'u', role: 'user', text, ctx: ctxLabel }, { id: turnId, role: 'assistant', parts: [], status: 'waiting' }] },
+    chat: { ...st.chat, busy: true, notes: [], turns: [...st.chat.turns, { id: turnId + 'u', role: 'user', text, ctx: ctxLabel }, { id: turnId, role: 'assistant', parts: [], status: 'waiting', startedAt: Date.now() }] },
   }));
   await api.ai.send({ text, context, model: s.settings.model, lang: s.settings.lang, mode: s.chat.mode, turnId, agent: agentInfo(s) });
 }
@@ -1275,23 +1275,23 @@ function applyAiEvent(turn, ev) {
   const last = parts[parts.length - 1];
   switch (ev.type) {
     case 'step':
-      return ev.n > 1 ? { ...turn, status: 'working' } : turn;
+      return ev.n > 1 ? { ...turn, status: 'working', step: ev.n } : { ...turn, step: ev.n };
     case 'thinking':
-      return parts.length ? turn : { ...turn, status: 'thinking' };
+      return parts.length ? { ...turn, phase: 'thinking' } : { ...turn, status: 'thinking', phase: 'thinking' };
     case 'writing':
-      if (last && last.type === 'text' && last.step === ev.step) return { ...turn, status: 'working' };
-      return { ...turn, status: 'working', parts: [...parts, { type: 'text', text: '', step: ev.step }] };
+      if (last && last.type === 'text' && last.step === ev.step) return { ...turn, status: 'working', phase: 'writing' };
+      return { ...turn, status: 'working', phase: 'writing', parts: [...parts, { type: 'text', text: '', step: ev.step }] };
     case 'delta':
       if (last && last.type === 'text') return { ...turn, status: 'working', parts: [...parts.slice(0, -1), { ...last, text: last.text + ev.text }] };
       return { ...turn, status: 'working', parts: [...parts, { type: 'text', text: ev.text, step: ev.step }] };
     case 'toolStart':
-      return { ...turn, status: 'working', parts: [...parts, { type: 'tool', callId: ev.callId, name: ev.name, input: null, status: 'streaming', step: ev.step }] };
+      return { ...turn, status: 'working', phase: 'tool', parts: [...parts, { type: 'tool', callId: ev.callId, name: ev.name, input: null, status: 'streaming', step: ev.step }] };
     case 'discard':
       return { ...turn, parts: parts.filter((p) => p.step !== ev.step) };
     case 'done':
       return {
         ...turn, parts: endParts(parts), status: ev.stopReason === 'refusal' ? 'refusal' : 'done', usage: ev.usage, cost: ev.cost, model: ev.model,
-        steps: ev.steps, limit: ev.limit, long: ev.long, full: ev.full,
+        steps: ev.steps, limit: ev.limit, long: ev.long, full: ev.full, empty: ev.empty,
       };
     case 'aborted':
       return { ...turn, parts: endParts(parts), status: 'aborted', partial: ev.partial };

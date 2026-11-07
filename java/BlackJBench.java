@@ -148,12 +148,42 @@ public class BlackJBench {
     /** Separate class, so java.awt is loaded only when the student's program uses it. */
     static final class Front {
         static final Set<java.awt.Window> seen = java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>());
+        static List<java.awt.Image> icons;
+
+        /** A program icon in every size the taskbar asks for: a near-black tile with a white play mark. */
+        static synchronized List<java.awt.Image> icons() {
+            if (icons != null) return icons;
+            icons = new ArrayList<>();
+            for (int s : new int[] { 16, 20, 24, 32, 40, 48, 64, 128, 256 }) {
+                java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(s, s, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+                java.awt.Graphics2D g = img.createGraphics();
+                g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+                g.setRenderingHint(java.awt.RenderingHints.KEY_STROKE_CONTROL, java.awt.RenderingHints.VALUE_STROKE_PURE);
+                float r = s * 0.46f;
+                g.setColor(new java.awt.Color(0x0a, 0x0a, 0x0b));
+                g.fill(new java.awt.geom.RoundRectangle2D.Float(0, 0, s, s, r, r));
+                java.awt.geom.Path2D.Float p = new java.awt.geom.Path2D.Float();
+                p.moveTo(s * 0.39f, s * 0.29f);
+                p.lineTo(s * 0.39f, s * 0.71f);
+                p.lineTo(s * 0.73f, s * 0.5f);
+                p.closePath();
+                g.setColor(java.awt.Color.WHITE);
+                g.setStroke(new java.awt.BasicStroke(Math.max(1f, s * 0.07f), java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND));
+                g.fill(p);
+                g.draw(p);
+                g.dispose();
+                icons.add(img);
+            }
+            return icons;
+        }
 
         static void check() {
             for (java.awt.Window w : java.awt.Window.getWindows()) {
                 if (!w.isShowing() || seen.contains(w)) continue;
                 seen.add(w);
                 java.awt.EventQueue.invokeLater(() -> {
+                    // Without its own icon the taskbar would show Java's coffee cup.
+                    if (w.getIconImages().isEmpty()) w.setIconImages(icons());
                     boolean top = w.isAlwaysOnTop();
                     w.setAlwaysOnTop(true);
                     w.toFront();

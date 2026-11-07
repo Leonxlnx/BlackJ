@@ -796,6 +796,13 @@ button.doc-sig:hover { text-decoration: underline; text-decoration-color: var(--
 .agent-diff-foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--rule); font-size: 12px; color: var(--muted); }
 .agent-diff-foot .grow { flex: 1; }
 .agent-diff-foot .link { font-size: 12px; color: var(--text-2); }
+.live-status { display: flex; align-items: center; gap: 0; font-variant-numeric: tabular-nums; }
+.live-status span { white-space: pre; }
+.live-dot { width: 6px; height: 6px; margin-right: 8px; border-radius: 50%; background: var(--accent); animation: live-pulse 1.6s ease-in-out infinite; }
+@keyframes live-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+.build-more { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.build-more .msg-meta { margin: 0; flex: 1; }
 .build-title { margin: 4px 0 6px; font-size: 17px; line-height: 24px; font-weight: 600; }
 .build-card { background: var(--inset); border: 1px solid var(--rule); border-radius: var(--r-lg); overflow: hidden; margin: 8px 0 4px; }
 .build-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; font-size: 12px; }
