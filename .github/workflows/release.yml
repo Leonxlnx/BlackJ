@@ -1,0 +1,60 @@
+# Pushing a tag like v1.9.0 builds BlackJ.exe on Windows and publishes it as a GitHub release.
+# The release text comes from docs/releases/<tag>.md, the version from package.json.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Tag matches package.json and has release notes
+        id: version
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version"
+            exit 1
+          fi
+          if [ ! -f "docs/releases/$GITHUB_REF_NAME.md" ]; then
+            echo "::error::docs/releases/$GITHUB_REF_NAME.md is missing"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm test
+
+      - name: Package BlackJ.exe
+        shell: bash
+        run: |
+          npx electron-builder --win portable --publish never
+          cp "release/BlackJ-${{ steps.version.outputs.version }}-portable.exe" BlackJ.exe
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: BlackJ ${{ steps.version.outputs.version }}
+          body_path: docs/releases/${{ github.ref_name }}.md
+          files: BlackJ.exe
