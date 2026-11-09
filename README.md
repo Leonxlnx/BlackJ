@@ -118,7 +118,7 @@ npm run dist          # baut BlackJ.exe (portable)
 
 `electron . --smoke=<ordner>` fährt einen kompletten Testlauf durch die echte App und speichert Screenshots.
 
-**Release:** Version in `package.json` erhöhen, Release-Text nach `docs/releases/v<version>.md` schreiben, Tag `v<version>` pushen. GitHub baut `BlackJ.exe` und veröffentlicht das Release.
+**Release:** Version in `package.json` erhöhen, Release-Text nach `docs/releases/v<version>.md` schreiben, Tag `v<version>` pushen oder unter Actions → Release → *Run workflow* starten. GitHub baut `BlackJ.exe` und veröffentlicht das Release.
 
 **Aufbau:** `electron/` (Fenster, Projekte, javac, Objektbank, Debugger, JUnit, KI) · `java/` (läuft in einer eigenen JVM: Objektbank und Code Pad per Reflection, Debugger per JDI) · `src/` (Oberfläche, React + Monaco) · `resources/examples` (Beispielprojekte).
 
