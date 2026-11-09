@@ -1,15 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useStore, getState, setState } from '../store.js';
 import { useT, translate, formatKeys } from '../i18n.js';
 import A, { PANEL } from '../panels.js';
 import { api } from '../api.js';
 import monaco, { defineThemes } from '../lib/monaco.js';
 import { KEYWORDS } from '../lib/keywords.js';
-import { reindent } from '../lib/format.js';
-import { explainProblem } from '../lib/errors.js';
 import { explainException } from '../lib/exceptions.js';
 import { scopeRanges } from '../lib/javaParse.js';
 import { receiverOf, resolveReceiver, libMembers, projectMembers, callAt } from '../lib/completion.js';
+import { registerEditorFeatures, setCompileMarkers, takePendingReveal, refreshLenses } from '../lib/editor-features.js';
+import { modelFor, disposeOthers, setActiveModel } from '../lib/editor-models.js';
+import { EDITOR_FONT, remeasureOnFontLoad, fontLog, editorFontLoaded } from '../lib/editor-fonts.js';
+import { useEditorPrefs, editorPrefs, setEditorPref, rememberLang } from '../lib/editor-prefs.js';
+import { analyze } from '../lib/editor-symbols.js';
+import { EditorGlyph, fileGlyph } from '../lib/editor-icons.js';
+import '../styles/editor.css';
 import { infoFor } from '../model.js';
 import { registerEditor } from '../lib/tour.js';
 import { proposalFor } from '../agent.js';
@@ -25,6 +30,8 @@ function registerProviders() {
   if (providersReady) return;
   providersReady = true;
   defineThemes();
+  // Completion, definitions, references, rename, outline, folding, quick fixes … (lib/editor-features.js).
+  registerEditorFeatures();
 
   monaco.languages.registerHoverProvider('java', {
     provideHover(model, position) {
@@ -41,7 +48,8 @@ function registerProviders() {
       const projectModel = A.modelOf(s.files);
       const cur = projectModel.list.find((c) => c.file === s.activeTab) || null;
       const recv = resolveReceiver(model.getValue(), model.getOffsetAt(position), receiverOf(before), projectModel, cur);
-      if (!recv || recv.kind === 'array') return null;
+      // Project members get their hover from lib/editor-features.js (with Javadoc and parameters).
+      if (!recv || recv.kind !== 'lib') return null;
       const members = recv.kind === 'lib'
         ? libMembers(recv.cls, recv.statics, recv.args, s.settings.lang)
         : projectMembers(projectModel, recv.cls, recv.statics, !!cur && cur.fileClass === recv.cls.fileClass);
@@ -51,12 +59,6 @@ function registerProviders() {
       const sigs = hits.slice(0, 6).map((m) => (m.field ? `${m.ret} ${m.owner || owner}.${m.name}` : `${m.ret} ${m.name}(${m.params.map((p, i) => (m.names ? `${p} ${m.names[i]}` : p)).join(', ')})`)).join('\n');
       const doc = hits.find((m) => m.doc);
       return { range, contents: [{ value: '```java\n' + sigs + (hits.length > 6 ? '\n…' : '') + '\n```' }, ...(doc ? [{ value: doc.doc }] : [])] };
-    },
-  });
-
-  monaco.languages.registerDocumentFormattingEditProvider('java', {
-    provideDocumentFormattingEdits(model) {
-      return [{ range: model.getFullModelRange(), text: reindent(model.getValue()) }];
     },
   });
 
@@ -133,118 +135,14 @@ function registerProviders() {
       const actions = problems.slice(0, 1).map((p) => ({
         title: translate(s.settings.lang, 'ai.fix'),
         kind: 'quickfix',
-        isPreferred: true,
+        // The exact fixes of lib/editor-quickfix.js come first (Umschalt+Alt+. applies those).
+        isPreferred: false,
         command: { id: 'blackj.aiFix', title: translate(s.settings.lang, 'ai.fix'), arguments: [p] },
       }));
       return { actions, dispose() {} };
     },
   });
 
-  const snippets = [
-    ['sout', 'System.out.println(${1});', 'System.out.println(…)'],
-    ['main', 'public static void main(String[] args) {\n\t${1}\n}', 'main-Methode / main method'],
-    ['fori', 'for (int ${1:i} = 0; ${1:i} < ${2:anzahl}; ${1:i}++) {\n\t${3}\n}', 'for-Schleife / for loop'],
-    ['foreach', 'for (${1:Typ} ${2:element} : ${3:liste}) {\n\t${4}\n}', 'for-each'],
-    ['if', 'if (${1:bedingung}) {\n\t${2}\n}', 'if'],
-    ['ifelse', 'if (${1:bedingung}) {\n\t${2}\n} else {\n\t${3}\n}', 'if / else'],
-    ['while', 'while (${1:bedingung}) {\n\t${2}\n}', 'while'],
-    ['scanner', 'Scanner ${1:eingabe} = new Scanner(System.in);', 'Scanner(System.in)'],
-    ['test', '@Test\npublic void ${1:testName}() {\n\t${2:assertEquals(erwartet, tatsaechlich);}\n}', 'JUnit @Test'],
-    ['get', 'public ${1:int} get${2:Wert}() {\n\treturn ${3:wert};\n}', 'Getter'],
-    ['set', 'public void set${1:Wert}(${2:int} ${3:wert}) {\n\tthis.${3:wert} = ${3:wert};\n}', 'Setter'],
-  ];
-  const keywords = Object.keys(KEYWORDS).filter((k) => /^[a-z]/.test(k));
-  monaco.languages.registerCompletionItemProvider('java', {
-    triggerCharacters: ['.'],
-    provideCompletionItems(model, position) {
-      const word = model.getWordUntilPosition(position);
-      const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
-      const lineBefore = model.getLineContent(position.lineNumber).slice(0, word.startColumn - 1);
-      const s = getState();
-      const projectModel = A.modelOf(s.files);
-      const K = monaco.languages.CompletionItemKind;
-      const items = [];
-      if (/\.\s*$/.test(lineBefore)) {
-        const cur = projectModel.list.find((c) => c.file === s.activeTab) || null;
-        const recv = resolveReceiver(model.getValue(), model.getOffsetAt(position), receiverOf(lineBefore), projectModel, cur);
-        if (recv) return { suggestions: memberSuggestions(recv, projectModel, cur, s.settings.lang, range) };
-        for (const c of projectModel.list) {
-          for (const m of c.methods) {
-            if (m.visibility === 'private') continue;
-            items.push({ label: `${m.name}(${m.params.map((p) => p.type).join(', ')})`, filterText: m.name, kind: K.Method, detail: `${c.simple} · ${m.returnType}`, documentation: m.doc ? m.doc.text : undefined, insertText: m.params.length ? `${m.name}(${m.params.map((p, i) => `\${${i + 1}:${p.name}}`).join(', ')})` : `${m.name}()`, insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet, range });
-          }
-        }
-        return { suggestions: items };
-      }
-      for (const [label, body, detail] of snippets) items.push({ label, kind: K.Snippet, detail, insertText: body, insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet, range });
-      for (const k of keywords) items.push({ label: k, kind: K.Keyword, insertText: k, range, documentation: KEYWORDS[k][s.settings.lang] || KEYWORDS[k].de });
-      for (const c of projectModel.list) items.push({ label: c.simple, kind: c.kind === 'interface' ? K.Interface : K.Class, detail: c.doc ? c.doc.text.slice(0, 80) : c.pkg, insertText: c.simple, range });
-      for (const tname of ['String', 'ArrayList', 'HashMap', 'Scanner', 'System', 'Math', 'Integer', 'Double', 'Random']) items.push({ label: tname, kind: K.Class, insertText: tname, range });
-      return { suggestions: items };
-    },
-  });
-}
-
-/** Completion items for the members of a resolved receiver (see lib/completion.js). */
-function memberSuggestions(recv, projectModel, cur, lang, range) {
-  const K = monaco.languages.CompletionItemKind;
-  const Snippet = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
-  const de = lang !== 'en';
-  if (recv.kind === 'array') {
-    return [{ label: 'length', kind: K.Field, detail: 'int', documentation: de ? 'Anzahl der Elemente im Array (ohne Klammern).' : 'Number of elements in the array (no parentheses).', insertText: 'length', range }];
-  }
-  const owner = recv.kind === 'lib' ? recv.cls : recv.cls.simple;
-  const members = recv.kind === 'lib'
-    ? libMembers(recv.cls, recv.statics, recv.args, lang)
-    : projectMembers(projectModel, recv.cls, recv.statics, !!cur && cur.fileClass === recv.cls.fileClass);
-  const byName = new Map();
-  for (const m of members) {
-    const k = (m.field ? 'f:' : 'm:') + m.name;
-    if (!byName.has(k)) byName.set(k, []);
-    byName.get(k).push(m);
-  }
-  const items = [];
-  for (const list of byName.values()) {
-    const m = list[0];
-    const doc = (list.find((x) => x.doc) || {}).doc || undefined;
-    const sortText = (doc && recv.kind === 'lib' ? '0' : '1') + m.name;
-    if (m.field) {
-      items.push({ label: m.name, kind: m.isStatic ? K.Constant : K.Field, detail: `${m.ret} · ${m.owner || owner}`, documentation: doc, insertText: m.name, sortText, range });
-      continue;
-    }
-    // Many overloads (println, valueOf, append …) become one entry that lists them all.
-    if (list.length > 3) {
-      const sigs = list.map((x) => `${x.name}(${x.params.join(', ')})`).join('\n');
-      items.push({ label: `${m.name}(…)`, filterText: m.name, kind: K.Method, detail: `${m.ret} · ${de ? `${list.length} Varianten` : `${list.length} variants`}`, documentation: { value: (doc ? doc + '\n\n' : '') + '```java\n' + sigs + '\n```' }, insertText: `${m.name}($1)`, insertTextRules: Snippet, sortText, range });
-      continue;
-    }
-    for (const x of list) {
-      const holes = x.params.map((p, i) => `\${${i + 1}:${(x.names && x.names[i]) || p.replace(/<.*>/, '').replace(/[^\w]/g, '') || 'wert'}}`);
-      items.push({ label: `${x.name}(${x.params.join(', ')})`, filterText: x.name, kind: K.Method, detail: `${x.ret} · ${x.owner || owner}`, documentation: x.doc || doc, insertText: `${x.name}(${holes.join(', ')})`, insertTextRules: Snippet, sortText, range });
-    }
-  }
-  return items;
-}
-
-const models = new Map();
-function modelFor(dir, name, content) {
-  const key = dir + '|' + name;
-  let m = models.get(key);
-  if (!m || m.isDisposed()) {
-    const isText = name === '#readme';
-    m = monaco.editor.createModel(content, isText ? 'plaintext' : 'java', monaco.Uri.parse('inmemory://blackj/' + encodeURIComponent(dir) + '/' + encodeURIComponent(name)));
-    m.updateOptions({ tabSize: 4, insertSpaces: true });
-    models.set(key, m);
-  }
-  return m;
-}
-function disposeOthers(dir) {
-  for (const [k, m] of models) {
-    if (!k.startsWith(dir + '|')) {
-      m.dispose();
-      models.delete(k);
-    }
-  }
 }
 
 function scopeDecorations(src) {
@@ -344,36 +242,121 @@ export default function EditorPanel() {
   useEffect(() => {
     registerProviders();
     const st = getState().settings;
+    const prefs = editorPrefs();
+    const fontAtCreate = editorFontLoaded();
     const ed = monaco.editor.create(hostRef.current, {
       automaticLayout: true,
       theme: 'blackj-' + st.theme,
-      fontFamily: "'JetBrains Mono', Consolas, monospace",
+      fontFamily: EDITOR_FONT,
       fontSize: st.fontSize,
+      fontWeight: '400',
+      fontLigatures: false,
+      letterSpacing: 0,
       lineHeight: Math.round(st.fontSize * 1.6),
-      minimap: { enabled: false },
-      scrollBeyondLastLine: false,
-      renderLineHighlight: 'line',
-      padding: { top: 10, bottom: 12 },
+      // Caret and scrolling glide (only on deliberate moves, never while typing).
+      cursorBlinking: 'smooth',
+      cursorSmoothCaretAnimation: 'explicit',
+      cursorStyle: 'line',
+      cursorWidth: 2,
       smoothScrolling: true,
-      cursorSmoothCaretAnimation: 'on',
+      mouseWheelScrollSensitivity: 1,
+      minimap: { enabled: !!prefs.minimap, renderCharacters: false, showSlider: 'mouseover', scale: 1, maxColumn: 80 },
+      scrollBeyondLastLine: false,
+      scrollBeyondLastColumn: 4,
+      renderLineHighlight: 'all',
+      renderLineHighlightOnlyWhenFocus: false,
+      roundedSelection: true,
+      selectionHighlight: true,
+      occurrencesHighlight: 'singleFile',
+      renderWhitespace: prefs.whitespace ? 'boundary' : 'selection',
+      padding: { top: 10, bottom: 12 },
       tabSize: 4,
+      insertSpaces: true,
+      detectIndentation: false,
       glyphMargin: true,
       lineDecorationsWidth: 10,
-      bracketPairColorization: { enabled: false },
-      guides: { indentation: true },
-      stickyScroll: { enabled: false },
+      lineNumbersMinChars: 3,
+      folding: true,
+      foldingStrategy: 'auto',
+      foldingHighlight: false,
+      showFoldingControls: 'mouseover',
+      bracketPairColorization: { enabled: true, independentColorPoolPerBracketType: false },
+      matchBrackets: 'always',
+      guides: { indentation: true, highlightActiveIndentation: true, bracketPairs: 'active', bracketPairsHorizontal: false, highlightActiveBracketPair: true },
+      stickyScroll: { enabled: prefs.stickyScroll !== false, maxLineCount: 3, defaultModel: 'outlineModel', scrollWithEditor: true },
+      autoClosingBrackets: 'languageDefined',
+      autoClosingQuotes: 'languageDefined',
+      autoClosingDelete: 'always',
+      autoClosingOvertype: 'always',
+      autoSurround: 'languageDefined',
+      autoIndent: 'full',
+      formatOnType: true,
+      formatOnPaste: true,
+      multiCursorModifier: 'alt',
+      dragAndDrop: true,
+      linkedEditing: false,
+      codeLens: true,
+      codeLensFontFamily: "'Inter Variable', 'Segoe UI', system-ui, sans-serif",
+      inlayHints: { enabled: 'on', fontSize: Math.max(10, st.fontSize - 3), padding: true },
+      suggest: { showStatusBar: false, preview: false, insertMode: 'replace', localityBonus: true, snippetsPreventQuickSuggestions: false, showWords: false },
+      quickSuggestions: { other: true, comments: false, strings: false },
+      quickSuggestionsDelay: 40,
+      suggestSelection: 'recentlyUsedByPrefix',
+      acceptSuggestionOnCommitCharacter: true,
+      tabCompletion: 'on',
+      wordBasedSuggestions: 'off',
+      parameterHints: { enabled: true, cycle: true },
+      definitionLinkOpensInPeek: false,
+      gotoLocation: { multipleReferences: 'peek', multipleDefinitions: 'goto' },
       fixedOverflowWidgets: true,
       overviewRulerBorder: false,
+      overviewRulerLanes: 2,
       hideCursorInOverviewRuler: true,
       inlineSuggest: { enabled: true, mode: 'subwordSmart' },
-      lightbulb: { enabled: 'on' },
+      lightbulb: { enabled: 'onCode' },
+      hover: { delay: 350, sticky: true, above: false },
       contextmenu: false,
-      scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+      mouseWheelZoom: false,
+      wordWrap: prefs.wordWrap ? 'on' : 'off',
+      wrappingIndent: 'indent',
+      scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
       'semanticHighlighting.enabled': false,
     });
     editorRef.current = ed;
     registerEditor(ed);
+    // Measure the editor font again once it (or a later subset of it) has loaded: see lib/editor-fonts.js.
+    const fontInfo = () => ed.getOption(monaco.editor.EditorOption.fontInfo);
+    fontLog.push({ at: Math.round(performance.now()), why: 'create', loaded: fontAtCreate, width: fontInfo().typicalHalfwidthCharacterWidth, mono: fontInfo().isMonospace });
+    remeasureOnFontLoad(monaco, () => {
+      const f = fontInfo();
+      fontLog.push({ at: Math.round(performance.now()), why: 'measured', loaded: editorFontLoaded(), width: f.typicalHalfwidthCharacterWidth, mono: f.isMonospace });
+    });
+    // Strg+Mausrad: font size, like in a browser (the app's setting, so every window follows).
+    const onWheel = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const s = getState().settings;
+      const next = Math.max(10, Math.min(28, s.fontSize + (e.deltaY < 0 ? 1 : -1)));
+      if (next !== s.fontSize) A.updateSettings({ fontSize: next });
+    };
+    hostRef.current.addEventListener('wheel', onWheel, { capture: true, passive: false });
+    const zoom = (d) => () => {
+      const s = getState().settings;
+      const next = d === 0 ? 14 : Math.max(10, Math.min(28, s.fontSize + d));
+      if (next !== s.fontSize) A.updateSettings({ fontSize: next });
+    };
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Equal, zoom(1));
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.NumpadAdd, zoom(1));
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Minus, zoom(-1));
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.NumpadSubtract, zoom(-1));
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Digit0, zoom(0));
+    // Strg+# comments a line (the # key is Monaco's "/" on German keyboards); Strg+Umschalt+D duplicates it.
+    ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyD, () => ed.trigger('keyboard', 'editor.action.copyLinesDownAction', null));
     for (const k of ['scope', 'bp', 'dbg', 'ex', 'agent']) decos.current[k] = ed.createDecorationsCollection();
+    // A new editor (docked back, popped out) shows Monaco's cached lenses first, plain text
+    // without their command: ask again so "Ausführen" is a real link.
+    const lensTimer = setTimeout(refreshLenses, 250);
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       const name = getState().activeTab;
       if (name) A.saveFile(name);
@@ -388,6 +371,12 @@ export default function EditorPanel() {
       const list = A.modelOf(s.files).list;
       const main = list.find((c) => c.file === s.activeTab && c.hasMain) || list.find((c) => c.hasMain);
       if (main) A.runMain(main.fileClass);
+    });
+    // F8: continue when the debugger has stopped, otherwise the next error (Monaco's own meaning).
+    ed.addCommand(monaco.KeyCode.F8, () => {
+      const s = getState();
+      if (s.debug && s.debug.paused) A.debugCommand('resume');
+      else ed.trigger('keyboard', 'editor.action.marker.nextInFiles', null);
     });
     ed.addCommand(monaco.KeyCode.F9, () => {
       const pos = ed.getPosition();
@@ -419,7 +408,9 @@ export default function EditorPanel() {
       const run = (id) => () => {
         ed.focus();
         const action = ed.getAction(id);
+        // Go to definition, references and quick fix are commands, not editor actions, in Monaco 0.57.
         if (action) action.run();
+        else ed.trigger('contextmenu', id, null);
       };
       const exec = (cmd) => () => {
         ed.focus();
@@ -436,9 +427,19 @@ export default function EditorPanel() {
         if (!ro) items.push({ label: tr('ai.write'), icon: 'pencil', keys: 'ctrl I', onClick: () => setState({ aiPrompt: { at: Date.now() } }) });
         items.push({ label: tr(s.settings.aiInline ? 'edit.aiInlineOff' : 'edit.aiInlineOn'), onClick: () => A.updateSettings({ aiInline: !s.settings.aiInline }) });
       }
+      if (isCode) {
+        // Code navigation and changes that understand Java (lib/editor-features.js).
+        const word = e.target.position && ed.getModel().getWordAtPosition(e.target.position);
+        items.push({ type: 'sep' });
+        items.push({ label: tr('editor.ctx.definition'), keys: 'F12', disabled: !word, onClick: run('editor.action.revealDefinition') });
+        items.push({ label: tr('editor.ctx.references'), keys: 'shift F12', disabled: !word, onClick: run('editor.action.goToReferences') });
+        items.push({ label: tr('editor.ctx.rename'), keys: 'F2', disabled: !word || ro, onClick: run('editor.action.rename') });
+        items.push({ label: tr('editor.ctx.quickFix'), keys: 'ctrl .', disabled: ro, onClick: run('editor.action.quickFix') });
+      }
       items.push({ type: 'sep' });
       if (isCode) items.push({ label: tr(hasBp ? 'edit.bpRemove' : 'edit.bpAdd', { line }), keys: 'F9', onClick: () => A.toggleBreakpoint(name, line) });
       items.push({ label: tr('shortcuts.comment'), keys: 'ctrl #', disabled: ro, onClick: run('editor.action.commentLine') });
+      items.push({ label: tr('editor.ctx.duplicate'), keys: 'ctrl shift D', disabled: ro, onClick: run('editor.action.copyLinesDownAction') });
       items.push({ label: tr('editor.format'), keys: 'shift Alt F', disabled: ro || !isCode, onClick: run('editor.action.formatDocument') });
       items.push({ label: tr('shortcuts.find'), keys: 'ctrl H', onClick: run('editor.action.startFindReplaceAction') });
       items.push({ label: tr('editor.goToLine'), keys: 'ctrl G', onClick: run('editor.action.gotoLine') });
@@ -467,7 +468,10 @@ export default function EditorPanel() {
     });
     return () => {
       clearTimeout(saveTimer.current);
+      clearTimeout(lensTimer);
+      hostRef.current && hostRef.current.removeEventListener('wheel', onWheel, { capture: true });
       registerEditor(null);
+      setActiveModel(null);
       ed.dispose();
     };
   }, []);
@@ -486,22 +490,49 @@ export default function EditorPanel() {
       return;
     }
     const m = modelFor(project.dir, file.name, file.content);
-    if (ed.getModel() !== m) ed.setModel(m);
+    setActiveModel(m);
+    if (ed.getModel() !== m) {
+      ed.setModel(m);
+      // Arrived here by "go to definition" in another file: show exactly that spot.
+      const sel = takePendingReveal(file.name);
+      if (sel) {
+        if ('startLineNumber' in sel) ed.setSelection(sel);
+        else ed.setPosition(sel);
+        ed.revealRangeInCenterIfOutsideViewport(ed.getSelection(), monaco.editor.ScrollType.Smooth);
+        ed.focus();
+      }
+    }
     if (m.getValue() !== file.content) {
       applying.current = true;
       m.pushEditOperations([], [{ range: m.getFullModelRange(), text: file.content }], () => null);
       applying.current = false;
     }
-    // Prose (the README with an exercise's task) wraps; code keeps its lines.
-    ed.updateOptions({ readOnly: !!project.readOnly, wordWrap: active === '#readme' ? 'on' : 'off' });
+    // Prose (the README with an exercise's task) wraps; code keeps its lines unless wrapping is on.
+    ed.updateOptions({ readOnly: !!project.readOnly, wordWrap: active === '#readme' || editorPrefs().wordWrap ? 'on' : 'off' });
   }, [active, files, readme, project]);
 
+  // Theme, font size and the person's view choices (minimap, wrapping, hints, sticky headers).
+  const prefs = useEditorPrefs();
   useEffect(() => {
     const ed = editorRef.current;
     if (!ed) return;
     monaco.editor.setTheme('blackj-' + settings.theme);
-    ed.updateOptions({ fontSize: settings.fontSize, lineHeight: Math.round(settings.fontSize * 1.6), inlineSuggest: { enabled: !!settings.aiInline } });
-  }, [settings.theme, settings.fontSize, settings.aiInline]);
+    ed.updateOptions({
+      fontSize: settings.fontSize,
+      lineHeight: Math.round(settings.fontSize * 1.6),
+      inlineSuggest: { enabled: !!settings.aiInline },
+      inlayHints: { enabled: prefs.inlayHints ? 'on' : 'off', fontSize: Math.max(10, settings.fontSize - 3), padding: true },
+      minimap: { enabled: !!prefs.minimap, renderCharacters: false, showSlider: 'mouseover', scale: 1, maxColumn: 80 },
+      stickyScroll: { enabled: prefs.stickyScroll !== false, maxLineCount: 3, defaultModel: 'outlineModel', scrollWithEditor: true },
+      renderWhitespace: prefs.whitespace ? 'boundary' : 'selection',
+      wordWrap: getState().activeTab === '#readme' || prefs.wordWrap ? 'on' : 'off',
+    });
+  }, [settings.theme, settings.fontSize, settings.aiInline, prefs]);
+
+  // Monaco's own words load before Monaco starts (main.jsx): remember the language for next time.
+  useEffect(() => {
+    rememberLang(settings.lang);
+  }, [settings.lang]);
 
   // BlueJ-style scope colours, recomputed shortly after typing.
   useEffect(() => {
@@ -530,30 +561,10 @@ export default function EditorPanel() {
     } else decos.current.dbg.clear();
   }, [active, breakpoints, paused]);
 
-  // Compiler problems as markers, with the plain-language explanation first.
+  // Compiler problems as squiggles with the plain-language explanation first (lib/editor-features.js).
   useEffect(() => {
-    if (!project) return;
-    for (const [key, m] of models) {
-      if (!key.startsWith(project.dir + '|')) continue;
-      const name = decodeURIComponent(key.slice(project.dir.length + 1));
-      const markers = compile.state === 'errors'
-        ? compile.problems.filter((p) => p.file === name).map((p) => {
-            const ex = explainProblem(p, settings.lang);
-            const line = Math.min(p.line, m.getLineCount());
-            return {
-              severity: p.severity === 'error' ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
-              message: `${ex.title}\n${ex.explain}\n${ex.fix}\n\njavac: ${p.message}${p.details.length ? '\n' + p.details.join('\n') : ''}`,
-              startLineNumber: line,
-              endLineNumber: line,
-              startColumn: Math.max(1, p.column),
-              endColumn: Math.max(p.column + 1, m.getLineMaxColumn(line)),
-              source: 'BlackJ',
-            };
-          })
-        : [];
-      monaco.editor.setModelMarkers(m, 'javac', markers);
-    }
-  }, [compile, settings.lang, project, tabs]);
+    if (project) setCompileMarkers();
+  }, [compile, settings.lang, project, tabs, active]);
 
   useEffect(() => {
     const ed = editorRef.current;
@@ -659,6 +670,40 @@ export default function EditorPanel() {
   const file = active && fileOf(active);
   const isJava = file && active !== '#readme';
   const info = isJava ? infoFor(files[active]) : null;
+
+  // Errors still in this file (a fixed line loses its squiggle before the next compile).
+  const [problemCount, setProblemCount] = useState(0);
+  useEffect(() => {
+    const count = () => {
+      const m = editorRef.current && editorRef.current.getModel();
+      setProblemCount(m ? monaco.editor.getModelMarkers({ resource: m.uri, owner: 'javac' }).filter((x) => x.severity === monaco.MarkerSeverity.Error).length : 0);
+    };
+    count();
+    const sub = monaco.editor.onDidChangeMarkers(count);
+    return () => sub.dispose();
+  }, [active, compile]);
+
+  // The segmented control's thumb glides to the chosen side.
+  const segRef = useRef(null);
+  useLayoutEffect(() => {
+    const el = segRef.current;
+    if (!el) return undefined;
+    const place = () => {
+      const btn = el.querySelector('button[aria-pressed="true"]');
+      if (!btn || !btn.offsetWidth) return;
+      el.style.setProperty('--seg-x', btn.offsetLeft + 'px');
+      el.style.setProperty('--seg-w', btn.offsetWidth + 'px');
+    };
+    place();
+    const frame = requestAnimationFrame(() => el.classList.add('measured'));
+    // Hidden in a narrow panel and shown again, or the font arrived late: measure again.
+    const ro = new ResizeObserver(place);
+    ro.observe(el);
+    return () => {
+      cancelAnimationFrame(frame);
+      ro.disconnect();
+    };
+  }, [mode, settings.lang, isJava]);
   const method = info && cursor ? [...info.methods, ...info.ctors].filter((m) => m.line <= cursor.line).sort((a, b) => b.line - a.line)[0] : null;
   const format = () => {
     const ed = editorRef.current;
@@ -667,6 +712,61 @@ export default function EditorPanel() {
   const hasSelection = selection && selection.file === active;
   const proposal = active && active !== '#readme' ? proposalFor(proposals, active) : null;
   const proposalStat = proposal ? lineDiff(proposal.before, proposal.after) : null;
+  const closeTab = (name) => {
+    A.saveFile(name);
+    A.closeTab(name);
+  };
+  // Jump to a member of the open class from the breadcrumb.
+  const outlineMenu = (e) => {
+    const ed = editorRef.current;
+    const m = ed && ed.getModel();
+    if (!m) return;
+    const a = analyze(m.getValue());
+    const r = e.currentTarget.getBoundingClientRect();
+    const top = a.classes.filter((c) => !c.owner);
+    const items = [];
+    for (const c of top) {
+      const own = a.members.filter((x) => x.owner === c.block);
+      const groups = [['field', t('editor.outline.fields')], ['ctor', t('editor.outline.ctors')], ['method', t('editor.outline.methods')]];
+      for (const [kind, label] of groups) {
+        const list = own.filter((x) => x.kind === kind);
+        if (!list.length) continue;
+        items.push({ type: 'label', text: label });
+        for (const x of list) {
+          const pos = m.getPositionAt(x.start);
+          const sig = kind === 'field' ? `${x.name} · ${x.type}` : `${x.name}(${x.params ? m.getValue().slice(x.params[0] + 1, x.params[1]).replace(/\s+/g, ' ').trim() : ''})`;
+          items.push({ label: sig, hint: String(pos.lineNumber), onClick: () => { ed.setPosition(pos); ed.revealPositionInCenterIfOutsideViewport(pos, monaco.editor.ScrollType.Smooth); ed.focus(); } });
+        }
+      }
+    }
+    if (items.length) A.openMenu({ x: r.left, y: r.bottom + 4, items });
+  };
+  const viewMenu = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const toggle = (key, label) => ({ label, icon: prefs[key] ? 'check' : undefined, onClick: () => setEditorPref(key, !prefs[key]) });
+    A.openMenu({
+      x: r.right - 260,
+      y: r.bottom + 4,
+      items: [
+        toggle('minimap', t('editor.view.minimap')),
+        toggle('wordWrap', t('editor.view.wrap')),
+        toggle('inlayHints', t('editor.view.hints')),
+        toggle('stickyScroll', t('editor.view.sticky')),
+        toggle('whitespace', t('editor.view.whitespace')),
+        { type: 'sep' },
+        // "+" is the separator of formatKeys, so these keys are written out.
+        { label: t('editor.view.bigger'), hint: formatKeys(settings.lang, 'ctrl') + ' +', onClick: () => A.updateSettings({ fontSize: Math.min(28, settings.fontSize + 1) }) },
+        { label: t('editor.view.smaller'), hint: formatKeys(settings.lang, 'ctrl') + ' −', onClick: () => A.updateSettings({ fontSize: Math.max(10, settings.fontSize - 1) }) },
+        { type: 'note', text: t('editor.view.size', { n: settings.fontSize }) },
+      ],
+    });
+  };
+  const nextProblem = () => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    ed.focus();
+    ed.trigger('breadcrumb', 'editor.action.marker.next', null);
+  };
 
   return (
     <section className="panel editor-panel" aria-label="Editor">
@@ -676,16 +776,23 @@ export default function EditorPanel() {
             const f = fileOf(name);
             if (!f) return null;
             const label = name === '#readme' ? f.className : A.simpleName(f.className);
+            const dirty = A.isDirty(f);
+            const pending = !dirty && !!proposalFor(proposals, name);
             return (
               <button
                 key={name}
-                className="tab"
+                className={'tab etab' + (dirty || pending ? ' marked' : '')}
                 role="tab"
                 data-tour={name === '#readme' ? undefined : 'editor-tab:' + name}
                 aria-selected={name === active}
                 title={name}
                 onClick={() => A.openFile(name)}
-                onMouseDown={(e) => e.button === 1 && A.closeTab(name)}
+                onMouseDown={(e) => {
+                  // Middle click closes (and saves), without the browser's scroll cursor.
+                  if (e.button !== 1) return;
+                  e.preventDefault();
+                  closeTab(name);
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   const others = tabs.filter((x) => x !== name);
@@ -701,10 +808,13 @@ export default function EditorPanel() {
                   });
                 }}
               >
+                <EditorGlyph name={fileGlyph(name === '#readme' ? null : infoFor(f), name)} size={14} className="tab-glyph" />
                 <span className="tab-label">{label}</span>
-                {A.isDirty(f) ? <span className="dirty" title={t('editor.unsaved')} /> : proposalFor(proposals, name) ? <span className="dirty" title={t('agent.bar.text')} /> : null}
-                <span className="tab-close" role="button" aria-label={t('common.close')} onClick={(e) => { e.stopPropagation(); A.saveFile(name); A.closeTab(name); }}>
-                  <Icon name="close" />
+                <span className="tab-end">
+                  {dirty ? <span className="dirty" title={t('editor.unsaved')} /> : pending ? <span className="dirty pending" title={t('agent.bar.text')} /> : null}
+                  <span className="tab-close" role="button" aria-label={t('common.close')} onClick={(e) => { e.stopPropagation(); closeTab(name); }}>
+                    <Icon name="close" />
+                  </span>
                 </span>
               </button>
             );
@@ -713,12 +823,16 @@ export default function EditorPanel() {
         <span className="grow" />
         {isJava && (
           <div className="editor-tools">
-            <div className="seg seg-sm" role="group" data-tour="editor-mode">
+            <div className="seg seg-sm eseg" role="group" data-tour="editor-mode" ref={segRef}>
+              <span className="eseg-thumb" aria-hidden="true" />
               <button aria-pressed={mode === 'source'} onClick={() => setState({ editorMode: 'source' })}>{t('editor.source')}</button>
               <button aria-pressed={mode === 'docs'} onClick={() => setState({ editorMode: 'docs' })}>{t('editor.docs')}</button>
             </div>
             <button className="icon-btn" data-tour="format" title={t('editor.format') + ' (' + formatKeys(settings.lang, 'shift Alt F', '+') + ')'} aria-label={t('editor.format')} onClick={format} disabled={project.readOnly || mode !== 'source'}>
               <Icon name="indent" />
+            </button>
+            <button className="icon-btn" data-tour="editor-view" title={t('editor.view')} aria-label={t('editor.view')} onClick={viewMenu} disabled={mode !== 'source'}>
+              <EditorGlyph name="view" size={16} />
             </button>
             {!settings.aiOff && (
               <>
@@ -759,17 +873,35 @@ export default function EditorPanel() {
           )}
         </div>
       )}
-      {isJava && mode === 'source' && (files[active].pkg || method || (compile.state === 'errors' && hasKey && compile.problems.some((p) => p.file === active))) && (
-        <div className="breadcrumb">
-          <span className="muted">{files[active].pkg ? files[active].pkg + ' ›' : ''}</span>
-          <span>{A.simpleName(files[active].className)}</span>
+      {isJava && mode === 'source' && (
+        <div className="breadcrumb ecrumbs">
+          {files[active].pkg && (
+            <>
+              <span className="crumb-seg crumb-pkg">{files[active].pkg}</span>
+              <EditorGlyph name="chevron" size={12} className="crumb-sep" />
+            </>
+          )}
+          <button className="crumb-seg" onClick={outlineMenu} title={t('editor.outline')}>
+            <EditorGlyph name={fileGlyph(info, active)} size={14} />
+            <span>{A.simpleName(files[active].className)}</span>
+          </button>
           {method && (
             <>
-              <span className="muted">›</span>
-              <span>{method.name}({method.params.map((p) => p.type).join(', ')})</span>
+              <EditorGlyph name="chevron" size={12} className="crumb-sep" />
+              <button className="crumb-seg" onClick={outlineMenu} title={t('editor.outline')}>
+                <EditorGlyph name={info && info.ctors.includes(method) ? 'ctor' : 'method'} size={14} />
+                <span>{method.name}</span>
+                <span className="crumb-params">({method.params.map((p) => p.type).join(', ')})</span>
+              </button>
             </>
           )}
           <span className="grow" />
+          {problemCount > 0 && (
+            <button className="crumb-problems" onClick={nextProblem} title={t('editor.problems.next')}>
+              <EditorGlyph name="problem" size={14} />
+              <span>{t(problemCount === 1 ? 'editor.problems.one' : 'editor.problems.many', { n: problemCount })}</span>
+            </button>
+          )}
           {compile.state === 'errors' && compile.problems.some((p) => p.file === active) && hasKey && (
             <button className="link" onClick={() => A.aiFix(compile.problems.find((p) => p.file === active))}>{t('ai.fix')}</button>
           )}

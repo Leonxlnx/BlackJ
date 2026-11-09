@@ -5,7 +5,7 @@
 const MODIFIERS = new Set(['public', 'protected', 'private', 'static', 'final', 'abstract', 'synchronized', 'native', 'default', 'strictfp', 'transient', 'volatile', 'sealed', 'non-sealed']);
 
 /** Replaces comments and string contents with spaces, keeping every index and line break. */
-function mask(src) {
+export function mask(src) {
   const n = src.length;
   const out = [];
   const docs = [];

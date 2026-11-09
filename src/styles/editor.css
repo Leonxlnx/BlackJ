@@ -1,0 +1,199 @@
+/* Editor area (1.10): file tabs, breadcrumbs, the source/docs switch and Monaco's own parts in
+   BlackJ's quiet, slightly tactile look. Builds on the tokens in styles.css (--well*, --thumb-*,
+   --key-*, --press-shadow); every value has a fallback so the editor stands on its own. */
+
+/* ------------------------------------------------------------------ file tabs */
+
+.editor-panel .tabs .etab { gap: 7px; padding: 0 5px 0 10px; }
+.editor-panel .etab .tab-glyph { flex: none; color: var(--muted); transition: color var(--t-fast, 120ms); }
+.editor-panel .etab:hover .tab-glyph, .editor-panel .etab[aria-selected='true'] .tab-glyph { color: var(--text-2); }
+/* The end of a tab: the unsaved dot, which turns into the close button under the pointer. */
+.editor-panel .etab .tab-end { position: relative; display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; }
+.editor-panel .etab .tab-end > * { grid-area: 1 / 1; }
+.editor-panel .etab .tab-close { width: 18px; height: 18px; border-radius: 6px; }
+.editor-panel .etab .tab-end .dirty { width: 7px; height: 7px; background: var(--text-2); transition: opacity var(--t-fast, 120ms), transform var(--t-mid, 160ms) var(--ease-out); }
+.editor-panel .etab .tab-end .dirty.pending { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-2); }
+.editor-panel .tabs .etab.marked .tab-close { opacity: 0; }
+.editor-panel .tabs .etab.marked:hover .tab-close, .editor-panel .tabs .etab.marked .tab-close:focus-visible { opacity: 1; }
+.editor-panel .tabs .etab.marked:hover .tab-end .dirty { opacity: 0; transform: scale(0.4); }
+
+/* ------------------------------------------------------------------ source / documentation */
+
+.editor-panel .eseg { position: relative; isolation: isolate; }
+.editor-panel .eseg button { position: relative; z-index: 1; }
+.editor-panel .eseg .eseg-thumb {
+  position: absolute; z-index: 0; top: 2px; bottom: 2px; left: 0; width: var(--seg-w, 0); border-radius: var(--r-pill);
+  background: var(--seg-thumb); box-shadow: var(--thumb-shadow, var(--chip-shadow)); transform: translateX(var(--seg-x, 0)); opacity: 0; pointer-events: none;
+}
+.editor-panel .eseg.measured .eseg-thumb { opacity: 1; transition: transform 200ms var(--ease-out), width 200ms var(--ease-out); }
+.editor-panel .eseg.measured button[aria-pressed='true'] { background: transparent; box-shadow: none; }
+
+/* ------------------------------------------------------------------ breadcrumbs */
+
+.editor-panel .ecrumbs { gap: 1px; height: 32px; padding: 0 10px 0 10px; color: var(--text-2); min-width: 0; }
+.ecrumbs .crumb-seg {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; min-width: 0; padding: 0 7px; border: 0; border-radius: 7px;
+  background: none; color: var(--text-2); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer;
+  transition: background-color var(--t-fast, 120ms), color var(--t-fast, 120ms), box-shadow var(--t-mid, 160ms);
+}
+.ecrumbs .crumb-seg > span { overflow: hidden; text-overflow: ellipsis; }
+.ecrumbs .crumb-seg svg { flex: none; color: var(--muted); }
+.ecrumbs button.crumb-seg:hover { color: var(--text); background: var(--raised); }
+.ecrumbs button.crumb-seg:active { background: var(--well, var(--raised)); box-shadow: var(--press-shadow, none); }
+.ecrumbs .crumb-pkg { cursor: default; color: var(--muted); }
+.ecrumbs .crumb-sep { flex: none; color: var(--muted); opacity: 0.6; }
+.ecrumbs .crumb-params { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.ecrumbs .crumb-problems {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px 0 7px; margin-right: 4px; border: 0; border-radius: var(--r-pill);
+  background: var(--pill-negative-bg); color: var(--pill-negative-ink); font: inherit; font-size: 12px; font-weight: var(--w-medium, 500); cursor: pointer; flex: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--negative) 18%, transparent); transition: box-shadow var(--t-mid, 160ms);
+}
+.ecrumbs .crumb-problems:active { box-shadow: var(--press-shadow, none); }
+.ecrumbs .crumb-problems svg { flex: none; }
+
+/* ------------------------------------------------------------------ Monaco: caret, lines, gutter */
+
+/* A caret with soft ends that fades instead of blinking hard (cursorBlinking: smooth). */
+.editor-panel .monaco-editor .cursors-layer .cursor { border-radius: 1px; }
+/* Monaco centres its 2px caret on the gap between two characters by moving it 1px left (and
+   padding it 1px), but only when the caret is at least 2 CSS px wide. On a display scaled to 125 %
+   or 175 % the caret is 2 device px = 1.6 CSS px, Monaco skips the shift and the caret's left edge
+   sits on the gap: the bar stands up to 1.3px right of where the text is. Centre it here. */
+.monaco-editor .cursors-layer > .cursor[style*='padding-left: 0px'] { transform: translateX(-50%); }
+/* The current line: a hairline tone in the gutter and the text, nothing louder. */
+.editor-panel .monaco-editor .margin-view-overlays .current-line-margin { border: 0 !important; }
+.editor-panel .monaco-editor .view-overlays .current-line { border: 0 !important; }
+.editor-panel .monaco-editor .line-numbers { font-variant-numeric: tabular-nums; transition: color var(--t-fast, 120ms); }
+.editor-panel .monaco-editor .line-numbers.active-line-number { font-weight: 500; }
+/* Rounded selections and highlights. */
+.editor-panel .monaco-editor .selected-text, .editor-panel .monaco-editor .selectionHighlight,
+.editor-panel .monaco-editor .wordHighlight, .editor-panel .monaco-editor .wordHighlightStrong, .editor-panel .monaco-editor .wordHighlightText,
+.editor-panel .monaco-editor .findMatch, .editor-panel .monaco-editor .currentFindMatch { border-radius: 3px; }
+.editor-panel .monaco-editor .bracket-match { border-radius: 3px; }
+
+/* Folding: a thin chevron of our own that turns, instead of Monaco's arrows. */
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-expanded,
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-collapsed,
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-manual-expanded,
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-manual-collapsed { display: grid; place-items: center; }
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-expanded::before,
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-collapsed::before,
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-manual-expanded::before,
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-manual-collapsed::before {
+  content: ''; width: 12px; height: 12px; background: currentColor; transition: transform var(--t-mid, 160ms) var(--ease-out);
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M7 10l5 5 5-5'/></svg>") center / 12px no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M7 10l5 5 5-5'/></svg>") center / 12px no-repeat;
+}
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-collapsed::before,
+.editor-panel .monaco-editor .margin-view-overlays .codicon-folding-manual-collapsed::before { transform: rotate(-90deg); }
+.editor-panel .monaco-editor .inline-folded::after { border-radius: 4px; padding: 0 4px; background: var(--raised); color: var(--muted); }
+
+/* The quick-fix mark: a small patch (a fix for a sore spot) instead of the light bulb. */
+.monaco-editor .lightBulbWidget, .monaco-editor .codicon-light-bulb, .monaco-editor .codicon-lightbulb-autofix, .monaco-editor .codicon-lightbulb-sparkle, .monaco-editor .codicon-lightbulb-sparkle-autofix { display: grid !important; place-items: center; }
+.monaco-editor .lightBulbWidget::before, .monaco-editor .codicon-light-bulb::before, .monaco-editor .codicon-lightbulb-autofix::before,
+.monaco-editor .codicon-lightbulb-sparkle::before, .monaco-editor .codicon-lightbulb-sparkle-autofix::before {
+  content: '' !important; display: block; width: 15px; height: 15px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><rect x='3.2' y='8.6' width='17.6' height='6.8' rx='3.4' transform='rotate(-40 12 12)'/><rect x='8.6' y='9.2' width='6.8' height='5.6' rx='1.2' transform='rotate(-40 12 12)' fill='black' fill-opacity='0.3' stroke='none'/><circle cx='11' cy='11' r='0.6' fill='black'/><circle cx='13' cy='13' r='0.6' fill='black'/><circle cx='13' cy='11' r='0.6' fill='black'/><circle cx='11' cy='13' r='0.6' fill='black'/></svg>") center / 15px no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><rect x='3.2' y='8.6' width='17.6' height='6.8' rx='3.4' transform='rotate(-40 12 12)'/><rect x='8.6' y='9.2' width='6.8' height='5.6' rx='1.2' transform='rotate(-40 12 12)' fill='black' fill-opacity='0.3' stroke='none'/><circle cx='11' cy='11' r='0.6' fill='black'/><circle cx='13' cy='13' r='0.6' fill='black'/><circle cx='13' cy='11' r='0.6' fill='black'/><circle cx='11' cy='13' r='0.6' fill='black'/></svg>") center / 15px no-repeat;
+}
+
+/* "Ausführen" above main(): a quiet link with the run mark (a play shape with motion ticks). */
+.editor-panel .monaco-editor .codelens-decoration { font-size: 11.5px !important; font-weight: 500; letter-spacing: 0; }
+/* Monaco shows cached lenses (an editor docked back) as a <span>: the same look and glyph. */
+.editor-panel .monaco-editor .codelens-decoration a, .editor-panel .monaco-editor .codelens-decoration > span:not(:empty) { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px 0 4px; margin-left: -4px; border-radius: 6px; color: var(--muted) !important; text-decoration: none !important; transition: background-color var(--t-fast, 120ms), color var(--t-fast, 120ms); }
+.editor-panel .monaco-editor .codelens-decoration a:hover { color: var(--text) !important; background: var(--raised); }
+.editor-panel .monaco-editor .codelens-decoration a::before, .editor-panel .monaco-editor .codelens-decoration > span:not(:empty)::before {
+  content: ''; width: 11px; height: 11px; flex: none; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M9 6.9v10.2a1.2 1.2 0 0 0 1.8 1l8.3-5.1a1.2 1.2 0 0 0 0-2L10.8 5.9A1.2 1.2 0 0 0 9 6.9z' fill='black' fill-opacity='0.35'/><path d='M3.75 9.5H6M3.75 14.5H6'/></svg>") center / 11px no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M9 6.9v10.2a1.2 1.2 0 0 0 1.8 1l8.3-5.1a1.2 1.2 0 0 0 0-2L10.8 5.9A1.2 1.2 0 0 0 9 6.9z' fill='black' fill-opacity='0.35'/><path d='M3.75 9.5H6M3.75 14.5H6'/></svg>") center / 11px no-repeat;
+}
+
+/* Sticky class and method headers: the same ground with a hairline under them. */
+.editor-panel .monaco-editor .sticky-widget { box-shadow: 0 1px 0 var(--rule) !important; width: 100% !important; }
+/* A line only partly in the sticky area fades out instead of leaving clipped glyph tops. */
+.editor-panel .monaco-editor .sticky-widget-lines-scrollable { -webkit-mask-image: linear-gradient(#000 calc(100% - 5px), transparent); mask-image: linear-gradient(#000 calc(100% - 5px), transparent); }
+.editor-panel .monaco-editor .sticky-widget .sticky-line-content { cursor: pointer; }
+
+/* Squiggles: a calm wave in the error colour. */
+.editor-panel .monaco-editor .squiggly-error { background-size: 6px 3px !important; opacity: 0.95; }
+
+/* ------------------------------------------------------------------ Monaco: floating parts */
+
+.monaco-editor .suggest-widget, .monaco-editor .monaco-hover, .monaco-editor .parameter-hints-widget,
+.monaco-editor .rename-box, .monaco-editor .find-widget, .action-widget, .monaco-editor .peekview-widget .head { font-family: var(--font); }
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row { border-radius: 7px; }
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row .label-description { font-size: 11.5px; opacity: 0.75; }
+.monaco-editor .suggest-widget .monaco-list .monaco-list-row .signature-label { font-family: var(--mono); font-size: 11.5px; opacity: 0.7; }
+.monaco-editor .suggest-details { font-family: var(--font); }
+.monaco-editor .suggest-details .docs code, .monaco-editor .suggest-details pre { font-family: var(--mono); }
+
+/* Errors in the hover: title first, readable text, the javac line quieter. */
+.monaco-editor .monaco-hover .marker.hover-contents { line-height: 1.5; font-size: 12.5px; max-width: 520px; }
+.monaco-editor .monaco-hover .marker.hover-contents, .monaco-editor .monaco-hover .marker.hover-contents * { font-family: var(--font) !important; }
+.monaco-editor .monaco-hover .marker.hover-contents .source, .monaco-editor .monaco-hover .marker.hover-contents .code { color: var(--muted) !important; opacity: 1 !important; }
+.monaco-editor .monaco-hover .hover-row.status-bar { border-top: 1px solid var(--rule); }
+.monaco-editor .monaco-hover .hover-row.status-bar .actions .action-container .action { border-radius: 6px; padding: 2px 6px; }
+.monaco-editor .monaco-hover .hover-row.status-bar .actions .action-container .action:hover { background: var(--raised); }
+/* "Problem anzeigen", "Schnelle Problembehebung": quiet grey, not bright blue links. */
+.monaco-editor .monaco-hover .hover-row.status-bar .action, .monaco-editor .monaco-hover .hover-row.status-bar .action * { color: var(--text-2) !important; }
+.monaco-editor .monaco-hover .hover-row.status-bar .action:hover, .monaco-editor .monaco-hover .hover-row.status-bar .action:hover * { color: var(--text) !important; }
+
+/* Rename box and the quick-fix list: the app's floating chrome. */
+.monaco-editor .rename-box:not(.rename-candidate-list-container):not(.rename-candidate) { border-radius: 12px !important; box-shadow: var(--float-shadow) !important; padding: 6px !important; background: var(--surface) !important; }
+.monaco-editor .rename-box .rename-candidate-list-container:empty, .monaco-editor .rename-box .rename-candidate-list-container:not(:has(.monaco-list-row)) { display: none; }
+.monaco-editor .rename-box .rename-input-with-button { border-radius: 8px; overflow: hidden; }
+.monaco-editor .rename-box .rename-input { font-family: var(--mono) !important; padding: 4px 8px !important; }
+.monaco-editor .rename-box .rename-label { color: var(--muted); font-size: 11.5px; padding: 4px 2px 0; }
+.action-widget { border-radius: 12px !important; box-shadow: var(--float-shadow) !important; border: 0 !important; min-width: 340px !important; }
+/* Wide enough for "Importieren: java.util.ArrayList": the label is what the student needs. */
+.action-widget .monaco-list, .action-widget .monaco-list-rows, .action-widget .monaco-scrollable-element { width: 100% !important; }
+.action-widget .monaco-list-row .title { overflow: hidden; text-overflow: ellipsis; }
+/* "Mit KI beheben" carries the tutor's spark, the exact fixes keep the patch. */
+.action-widget .monaco-list-row[aria-label^='Mit KI beheben'] .codicon::before, .action-widget .monaco-list-row[aria-label^='Fix with AI'] .codicon::before {
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linejoin='round'><path d='M10.5 6Q11.9 11.6 17.5 13Q11.9 14.4 10.5 20Q9.1 14.4 3.5 13Q9.1 11.6 10.5 6Z'/><path d='M18.5 3.1Q18.98 5.02 20.9 5.5Q18.98 5.98 18.5 7.9Q18.02 5.98 16.1 5.5Q18.02 5.02 18.5 3.1Z' fill='black' stroke-width='0.8'/></svg>") center / 15px no-repeat;
+  mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linejoin='round'><path d='M10.5 6Q11.9 11.6 17.5 13Q11.9 14.4 10.5 20Q9.1 14.4 3.5 13Q9.1 11.6 10.5 6Z'/><path d='M18.5 3.1Q18.98 5.02 20.9 5.5Q18.98 5.98 18.5 7.9Q18.02 5.98 16.1 5.5Q18.02 5.02 18.5 3.1Z' fill='black' stroke-width='0.8'/></svg>") center / 15px no-repeat;
+}
+.action-widget .monaco-list .monaco-list-row { border-radius: 7px; }
+.action-widget .action-widget-action-bar { border-top: 1px solid var(--rule) !important; }
+
+/* Find widget: the app's field look. */
+.monaco-editor .find-widget { border-radius: 0 0 12px 12px; box-shadow: var(--float-shadow) !important; }
+.monaco-editor .find-widget .monaco-inputbox { border-radius: 7px; }
+/* The "Aa ab .*" toggles after Strg+D: floating chrome like the rest, not loose on the code. */
+.monaco-editor .findOptionsWidget { border: 0 !important; border-radius: 10px; background: var(--surface) !important; box-shadow: var(--float-shadow) !important; padding: 2px; }
+
+/* Peek (references, definition): rounded head, quiet border. */
+.monaco-editor .peekview-widget .head { border-radius: 10px 10px 0 0; }
+.monaco-editor .peekview-widget .head .peekview-title .filename { font-weight: 600; }
+.monaco-editor .zone-widget .zone-widget-container.reference-zone-widget { border-radius: 10px; overflow: hidden; }
+/* "Verweise (3)" once, not "Verweise - Verweise (3)"; no stray overview-ruler squares inside. */
+.monaco-editor .zone-widget-container.reference-zone-widget .peekview-title .filename,
+.monaco-editor .zone-widget-container.reference-zone-widget .peekview-title .dirname { display: none; }
+.monaco-editor .reference-zone-widget .peekview-title .meta::before { content: none !important; }
+.monaco-editor .reference-zone-widget .monaco-editor .decorationsOverviewRuler { display: none !important; }
+
+/* Suggestion and outline icons: BlackJ's own glyphs (the diagram's UML card for a class). */
+.monaco-editor .suggest-widget .codicon[class*='codicon-symbol-']::before,
+.monaco-editor .suggest-details .codicon[class*='codicon-symbol-']::before { content: '' !important; }
+.monaco-editor .suggest-widget .codicon[class*='codicon-symbol-'],
+.monaco-editor .suggest-details .codicon[class*='codicon-symbol-'] {
+  /* The glyph font gave the icon its width; without it the box needs its own size. */
+  display: inline-block; width: 16px !important; height: 16px !important; flex: none; vertical-align: middle;
+  -webkit-mask: var(--eg-mask) center / 15px no-repeat; mask: var(--eg-mask) center / 15px no-repeat; background: currentColor;
+}
+.monaco-editor .codicon-symbol-class, .monaco-editor .codicon-symbol-struct { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M4 9.6V7.7a3.2 3.2 0 0 1 3.2-3.2h9.6A3.2 3.2 0 0 1 20 7.7v1.9z' fill='black' fill-opacity='0.3' stroke='none'/><rect x='4' y='4.5' width='16' height='15' rx='3.2'/><path d='M4 9.6h16M8 13.4h8M8 16.2h5'/></svg>"); }
+.monaco-editor .codicon-symbol-interface { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='4.5' width='16' height='15' rx='3.2' stroke-dasharray='2.6 2.4'/><path d='M4 9.6h16'/><circle cx='12' cy='14.6' r='2'/></svg>"); }
+.monaco-editor .codicon-symbol-enum, .monaco-editor .codicon-symbol-enum-member { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><rect x='4' y='4.5' width='16' height='15' rx='3.2'/><path d='M4 9.6h16M11 12.6h5M11 16h4'/><circle cx='8.4' cy='12.6' r='0.9' fill='black'/><circle cx='8.4' cy='16' r='0.9' fill='black'/></svg>"); }
+.monaco-editor .codicon-symbol-method, .monaco-editor .codicon-symbol-function { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M8.5 5.5C6.3 7.4 5.2 9.6 5.2 12s1.1 4.6 3.3 6.5M15.5 5.5c2.2 1.9 3.3 4.1 3.3 6.5s-1.1 4.6-3.3 6.5'/><circle cx='12' cy='12' r='1.8' fill='black' stroke='none'/></svg>"); }
+.monaco-editor .codicon-symbol-constructor { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M8.5 5.5C6.3 7.4 5.2 9.6 5.2 12s1.1 4.6 3.3 6.5M15.5 5.5c2.2 1.9 3.3 4.1 3.3 6.5s-1.1 4.6-3.3 6.5M12 9.3v5.4M9.3 12h5.4'/></svg>"); }
+.monaco-editor .codicon-symbol-field, .monaco-editor .codicon-symbol-property { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='7.5' y='7.5' width='9' height='9' rx='2' transform='rotate(45 12 12)' fill='black' fill-opacity='0.25'/></svg>"); }
+.monaco-editor .codicon-symbol-constant { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black' stroke='black' stroke-width='1.9' stroke-linejoin='round'><rect x='7.5' y='7.5' width='9' height='9' rx='2' transform='rotate(45 12 12)'/></svg>"); }
+.monaco-editor .codicon-symbol-variable { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><rect x='3.5' y='8' width='17' height='8' rx='4' fill='black' fill-opacity='0.18'/><circle cx='8' cy='12' r='1.5' fill='black' stroke='none'/><path d='M11.5 12h5'/></svg>"); }
+.monaco-editor .codicon-symbol-keyword { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M5 8h14M5 12h9M5 16h12'/></svg>"); }
+.monaco-editor .codicon-symbol-snippet { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'><path d='M9 5.5c-2 0-2.5 1-2.5 2.5v2c0 1.2-.8 2-2 2 1.2 0 2 .8 2 2v2c0 1.5.5 2.5 2.5 2.5M15 5.5c2 0 2.5 1 2.5 2.5v2c0 1.2.8 2 2 2-1.2 0-2 .8-2 2v2c0 1.5-.5 2.5-2.5 2.5'/><path d='M12 9.5v5' stroke-width='2.2'/></svg>"); }
+.monaco-editor .codicon-symbol-module, .monaco-editor .codicon-symbol-namespace, .monaco-editor .codicon-symbol-text, .monaco-editor .codicon-symbol-misc { --eg-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round'><circle cx='12' cy='12' r='2.2' fill='black'/></svg>"); }
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-panel .eseg.measured .eseg-thumb, .editor-panel .etab .tab-end .dirty,
+  .editor-panel .monaco-editor .margin-view-overlays [class*='codicon-folding']::before { transition: none !important; }
+}

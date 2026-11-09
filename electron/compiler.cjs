@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { launcherPath } = require('./bench.cjs');
 
 const HEADER = /^(.+\.java):(\d+): (error|warning): (.*)$/;
 
@@ -52,9 +53,19 @@ function compile({ jdk, projectDir, outDir, files, classpath = [] }) {
     if (files.length === 0) return resolve({ ok: true, problems: [], output: '', ms: 0 });
     const argFile = path.join(outDir, '..', 'javac-args.txt');
     const quote = (s) => '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-    fs.writeFileSync(argFile, files.map(quote).join('\n'), 'utf8');
-    const cp = [outDir, ...classpath].join(path.delimiter);
-    const args = ['-J-Duser.language=en', '-J-Duser.country=US', '-encoding', 'UTF-8', '-g', '-parameters', '-Xmaxerrs', '200', '-d', outDir, '-cp', cp, '-sourcepath', projectDir, '@' + argFile];
+    // The sources relative to the project folder (javac runs there): a folder name outside the
+    // ANSI code page (Cyrillic, say) never has to pass through the launcher or the argument file.
+    const rel = (f) => {
+      const r = path.relative(projectDir, f);
+      return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : f;
+    };
+    fs.writeFileSync(argFile, files.map((f) => quote(rel(f))).join('\n'), 'utf8');
+    const cp = [outDir, ...classpath].map(launcherPath).join(path.delimiter);
+    // Everything in UTF-8: the argument file (Java 17 reads it in file.encoding) and the messages,
+    // read as UTF-8 below, so umlauts in file names and in the quoted source line arrive intact
+    // (stdout/stderr.encoding since Java 19, sun.* before).
+    const utf8Out = ['-J-Dfile.encoding=UTF-8', '-J-Dstdout.encoding=UTF-8', '-J-Dstderr.encoding=UTF-8', '-J-Dsun.stdout.encoding=UTF-8', '-J-Dsun.stderr.encoding=UTF-8'];
+    const args = ['-J-Duser.language=en', '-J-Duser.country=US', ...utf8Out, '-encoding', 'UTF-8', '-g', '-parameters', '-Xmaxerrs', '200', '-d', launcherPath(outDir), '-cp', cp, '-sourcepath', launcherPath(projectDir), '@' + launcherPath(argFile)];
     let output = '';
     let child;
     try {

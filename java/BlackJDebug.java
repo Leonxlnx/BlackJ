@@ -203,7 +203,7 @@ public class BlackJDebug {
                         step("out");
                         break;
                     case "pause":
-                        result = pause();
+                        result = pause(Boolean.TRUE.equals(req.get("arm")));
                         break;
                     case "variables":
                         result = variables(req.get("frame") == null ? 0 : ((Number) req.get("frame")).intValue());
@@ -415,6 +415,16 @@ public class BlackJDebug {
                         stop = t;
                         reason = "breakpoint";
                     }
+                } else if (armed != null && e.request() == armed) {
+                    // "Pause" while none of the student's code ran: stop where it runs next.
+                    LocatableEvent le = (LocatableEvent) e;
+                    ThreadReference t = le.thread();
+                    if (stop == null && !isForeign(t) && isStudent(le.location().declaringType().name())) {
+                        disarm();
+                        clearStepping(t);
+                        stop = t;
+                        reason = "pause";
+                    }
                 } else if (e instanceof StepEvent || e instanceof MethodEntryEvent) {
                     LocatableEvent le = (LocatableEvent) e;
                     StepPlan p = stepping.get(le.thread());
@@ -474,6 +484,7 @@ public class BlackJDebug {
         if (deathSent) return;
         deathSent = true;
         current = null;
+        armed = null;
         waiting.clear();
         stepping.clear();
         send(event("vmDeath"));
@@ -512,6 +523,15 @@ public class BlackJDebug {
 
     static Object resume() throws Exception {
         Map<String, Object> r = new LinkedHashMap<>();
+        if (current == null && armed != null) {
+            // "Continue" while waiting for the student's code: do not stop there after all.
+            disarm();
+            Map<String, Object> ev = event("resumed");
+            ev.put("reason", "disarm");
+            send(ev);
+            r.put("resumed", true);
+            return r;
+        }
         if (startSet != null) {
             EventSet s = startSet;
             startSet = null;
@@ -536,10 +556,37 @@ public class BlackJDebug {
         return r;
     }
 
-    static Object pause() throws Exception {
+    /**
+     * A method entry request for the student's classes, armed by a pause that found none of the
+     * student's code running (a window program waiting for a click, a key or its timer): the
+     * thread that runs the student's code next stops there. Resume disarms it.
+     */
+    static MethodEntryRequest armed;
+
+    static void arm() {
+        if (armed != null) return;
+        MethodEntryRequest me = erm.createMethodEntryRequest();
+        for (String f : LIBRARY) me.addClassExclusionFilter(f);
+        me.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+        me.enable();
+        armed = me;
+    }
+
+    static void disarm() {
+        if (armed == null) return;
+        try {
+            erm.deleteEventRequest(armed);
+        } catch (RuntimeException ignored) {
+            // the VM is gone
+        }
+        armed = null;
+    }
+
+    static Object pause(boolean arm) throws Exception {
         Map<String, Object> r = new LinkedHashMap<>();
         if (current == null) promote();
         if (current != null) {
+            disarm();
             r.put("paused", true);
             r.put("thread", current.name());
             return r;
@@ -573,8 +620,13 @@ public class BlackJDebug {
         }
         if (chosen == null) {
             r.put("paused", false);
+            if (arm) {
+                arm();
+                r.put("armed", true);
+            }
             return r;
         }
+        disarm();
         clearStepping(chosen);
         r.put("paused", true);
         r.put("thread", chosen.name());
@@ -1193,6 +1245,7 @@ public class BlackJDebug {
     /** Lets the program run on without the debugger. */
     static void shutdown() {
         detaching = true;
+        armed = null;
         try {
             erm.deleteAllBreakpoints();
             erm.deleteEventRequests(new ArrayList<>(erm.classPrepareRequests()));

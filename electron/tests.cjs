@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { launcherPath } = require('./bench.cjs');
 
 const STANDALONE = 'junit-platform-console-standalone-1.11.4.jar';
 const JUNIT4 = 'junit-4.13.2.jar';
@@ -269,23 +270,25 @@ function runTests({ jdk, resDir, classDir, cwd, classpath = [], select = { all: 
     classDir = path.resolve(classDir);
     const reportsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blackj-junit-'));
     const [junit4, hamcrest] = junitJars(resDir);
+    // Paths in their short form where a folder name is outside the ANSI code page (see bench.cjs).
+    const lp = launcherPath;
     const args = [
       '-Dfile.encoding=UTF-8',
       '-Dstdout.encoding=UTF-8',
       '-Dstderr.encoding=UTF-8',
-      '-jar', launcher, 'execute',
+      '-jar', lp(launcher), 'execute',
       '--disable-banner',
       '--disable-ansi-colors',
       '--details=tree',
       '--details-theme=unicode',
-      '--class-path=' + [classDir, junit4, hamcrest, ...classpath].join(path.delimiter),
-      '--reports-dir=' + reportsDir,
+      '--class-path=' + [classDir, junit4, hamcrest, ...classpath].map(lp).join(path.delimiter),
+      '--reports-dir=' + lp(reportsDir),
       // Every class may hold tests, not only names ending in "Test".
       '--include-classname=.*',
       // An endless loop in a JUnit 5 test fails that test after 10 s instead of hanging the run.
       '--config=junit.jupiter.execution.timeout.default=10s',
       '--config=junit.jupiter.execution.timeout.thread.mode.default=SEPARATE_THREAD',
-      ...selectors(select, classDir),
+      ...selectors(select, lp(classDir)),
     ];
     let output = '';
     let timedOut = false;

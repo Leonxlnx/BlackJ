@@ -19,7 +19,7 @@ const COMMON = [
 const KEYS = {
   editor: [...COMMON, 'reveal', 'insertRequest', 'agentHighlight'],
   dock: [...COMMON, 'console', 'pad', 'tests', 'recording'],
-  side: [...COMMON, 'chat', 'lastTour', 'tutorDraft', 'tour'],
+  side: [...COMMON, 'chat', 'lastTour', 'tutorDraft', 'tour', 'agentShots'],
 };
 
 // These run in the pop-out itself: helpers that only read, and the window's own menus and dialogs.

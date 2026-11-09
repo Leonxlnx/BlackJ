@@ -202,7 +202,7 @@ function launch(args, { suspend }) {
   return run;
 }
 
-/** Speaks the bench protocol (JSON lines after the JDWP banner). */
+/** Speaks the bench protocol (JSON lines after the JDWP banner, each behind the bench's mark). */
 function benchClient(run) {
   let buffer = '';
   let seq = 0;
@@ -214,8 +214,9 @@ function benchClient(run) {
     while ((nl = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, nl).trim();
       buffer = buffer.slice(nl + 1);
-      if (!line.startsWith('{')) continue;
-      const msg = JSON.parse(line);
+      const at = line.lastIndexOf('\u001e');
+      if (at < 0) continue;
+      const msg = JSON.parse(line.slice(at + 1));
       if (msg.event) {
         if (msg.event !== 'out') events.push(msg);
         continue;
@@ -518,6 +519,34 @@ function benchClient(run) {
     assert.deepStrictEqual(p.frames.map((f) => f.method), ['warte']);
     await dbg2.resume();
     assert.ok(Number((await within(call, 'warte reply')).value.text) > 0);
+  });
+
+  await check('an armed pause stops where the student code runs next (a window program waiting for a click)', async () => {
+    ev2.clear('paused');
+    ev2.clear('resumed');
+    assert.deepStrictEqual(await dbg2.pause({ arm: true }), { paused: false, armed: true });
+    await sleep(200);
+    assert.strictEqual(ev2.count('paused'), 0, 'nothing ran yet');
+    // The bench's own helper thread calls toString: that never stops.
+    const call = getAlter();
+    const p = await ev2.next('paused');
+    assert.strictEqual(p.reason, 'pause');
+    assert.strictEqual(p.thread, 'main');
+    assert.deepStrictEqual(where(p), [['Tier', 'getAlter', L.getAlter]]);
+    await dbg2.resume();
+    assert.strictEqual((await within(call, 'getAlter reply')).value.text, '7');
+  });
+
+  await check('continue cancels a pause that waits for student code', async () => {
+    ev2.clear('paused');
+    ev2.clear('resumed');
+    assert.deepStrictEqual(await dbg2.pause({ arm: true }), { paused: false, armed: true });
+    assert.deepStrictEqual(await dbg2.resume(), { resumed: true });
+    const r = await ev2.next('resumed');
+    assert.strictEqual(r.reason, 'disarm');
+    assert.strictEqual((await within(getAlter(), 'getAlter reply')).value.text, '7');
+    await sleep(300);
+    assert.strictEqual(ev2.count('paused'), 0);
   });
 
   await check('breakpoints in an anonymous class that loads later and in a package', async () => {

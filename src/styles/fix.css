@@ -1,0 +1,6 @@
+/* A label with its hint and the tactile switch from Settings (tutor setup, jar export). */
+.toggle-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.toggle-row-text { min-width: 0; cursor: pointer; }
+.toggle-row-title { line-height: 20px; }
+.toggle-row-text .field-hint { margin-top: 2px; }
+.toggle-row .switch { flex: none; margin-top: 1px; }

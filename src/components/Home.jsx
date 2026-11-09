@@ -171,10 +171,10 @@ export default function Home() {
             {current ? (
               <>
                 <button className="btn btn-primary btn-lg" onClick={() => A.openRecent(current.dir)}>{t('home.openShort')}</button>
-                <button className="btn btn-lg" onClick={() => setCreating(true)}>{t('home.new')}</button>
+                <button className="btn btn-lg" onClick={() => setCreating(true)}><Icon name="plus" />{t('home.new')}</button>
               </>
             ) : (
-              <button className="btn btn-primary btn-lg" onClick={() => setCreating(true)}>{t('home.new')}</button>
+              <button className="btn btn-primary btn-lg" onClick={() => setCreating(true)}><Icon name="plus" />{t('home.new')}</button>
             )}
             <button
               className={'btn btn-lg' + (current ? ' btn-quiet' : '')}
@@ -191,8 +191,9 @@ export default function Home() {
                 });
               }}
             >
+              <Icon name="folderOpen" />
               {t('home.import')}
-              <Icon name="chevron" />
+              <Icon name="chevron" className="btn-chev" />
             </button>
           </div>
           {creating && <NewProject onClose={() => setCreating(false)} />}
@@ -218,6 +219,7 @@ export default function Home() {
                     return (
                       <li key={r.dir} className={'recent-tile' + (gone ? ' gone' : '')}>
                         <button className="recent-open" onClick={() => A.openRecent(r.dir)} disabled={gone} title={r.dir}>
+                          <span className="recent-ico" aria-hidden="true"><Icon name="grid" /></span>
                           <span className="recent-name">
                             {r.name}
                             {parentOf(r) && <span className="recent-parent">{parentOf(r)}</span>}

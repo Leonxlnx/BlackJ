@@ -15,6 +15,9 @@ const t = (k, p) => translate(getState().settings.lang, k, p);
 let turnProjectDir = null;
 const waits = new Map(); // callId -> resolve of a proposal waiting for the student
 const programs = new Set(); // callIds that started Java code (run_main, create_object, call_method)
+const controllers = new Map(); // callId -> AbortController while its tool runs here
+// Code that builds a window: such a program is looked at, not run in the console.
+const GUI_SRC = /javax\.swing|java\.awt|\bJFrame\b/;
 
 export function init() {
   if (api.ai.onTool) api.ai.onTool(onAiTool);
@@ -25,8 +28,34 @@ export function startTurn(dir) {
   turnProjectDir = dir;
 }
 
+// A turn that broke off after tool rounds because the connection or Anthropic had a hiccup goes on
+// by itself, twice at most, after a short wait (the files may already have changed: starting over
+// would be worse). The window shows the wait; any other error waits for the student.
+const RETRY_CODES = new Set(['overloaded', 'server', 'offline', 'rateLimit', 'api']);
+const RETRY_LIMIT = 2;
+const retries = new Map(); // turnId -> automatic resumes so far
+
+function scheduleResume(ev) {
+  const n = (retries.get(ev.turnId) || 0) + 1;
+  if (n > RETRY_LIMIT) return;
+  retries.set(ev.turnId, n);
+  const delay = (ev.code === 'rateLimit' ? 15000 : 4000) * n;
+  patchTurn(ev.turnId, (turn) => ({ ...turn, retryAt: Date.now() + delay }));
+  setTimeout(() => {
+    const s = getState();
+    const last = s.chat.turns[s.chat.turns.length - 1];
+    if (!last || last.id !== ev.turnId || last.status !== 'error' || !last.retryAt || s.chat.busy) return;
+    patchTurn(ev.turnId, (turn) => ({ ...turn, retryAt: null }));
+    A.continueLast();
+  }, delay);
+}
+
 /** The turn ended: a proposal still waiting keeps its buttons; a later decision goes into a note. */
 export function endTurn(ev) {
+  patchTurn(ev.turnId, (turn) => ({ ...turn, endedAt: Date.now() }));
+  // A program the tutor kept running out of sight ends with its turn.
+  if (session && session.turnId === ev.turnId) endSession(ev.type !== 'done');
+  if (ev.type === 'error' && ev.partial && RETRY_CODES.has(ev.code)) scheduleResume(ev);
   if (ev.type === 'done') return;
   for (const p of Object.values(getState().agent.proposals)) {
     if (p.turnId !== ev.turnId || p.status !== 'pending') continue;
@@ -58,11 +87,6 @@ function patchPart(turnId, callId, patch) {
   });
 }
 
-const partOf = (turnId, callId) => {
-  const turn = getState().chat.turns.find((x) => x.id === turnId);
-  return turn && (turn.parts || []).find((p) => p.type === 'tool' && p.callId === callId);
-};
-
 export function setToolSummary(turnId, callId, summary) {
   patchPart(turnId, callId, (p) => (p ? { summary } : null));
 }
@@ -82,7 +106,13 @@ export function onToolCancel(ev) {
       openProposal('p' + callId);
       wait({ content: 'Stopped by the student.', isError: true });
     }
-    if (programs.has(callId)) {
+    const ac = controllers.get(callId);
+    if (ac) ac.abort();
+    if (session && session.callIds.has(callId)) {
+      // Looking or playing was cancelled: the program out of sight ends at once.
+      programs.delete(callId);
+      endSession(true);
+    } else if (programs.has(callId)) {
       programs.delete(callId);
       const b = getState().bench.state;
       if (b === 'running' || b === 'waiting') A.stopProgram();
@@ -93,7 +123,7 @@ export function onToolCancel(ev) {
 // ------------------------------------------------------------------ tool calls from the main process
 
 async function onAiTool(call) {
-  const reply = (content, isError) => api.ai.toolResult({ callId: call.callId, content: String(content ?? ''), isError: !!isError });
+  const reply = (content, isError, images) => api.ai.toolResult({ callId: call.callId, content: String(content ?? ''), isError: !!isError, ...(images && images.length ? { images } : {}) });
   const s = getState();
   const last = s.chat.turns[s.chat.turns.length - 1];
   if (!last || last.id !== call.turnId) return reply('This chat was closed.', true);
@@ -102,16 +132,20 @@ async function onAiTool(call) {
   if ((s.project ? s.project.dir : null) !== turnProjectDir) return reply('The student opened another project.', true);
   const impl = TOOL_IMPL[call.name];
   if (!impl) return reply('Unknown tool.', true);
-  patchPart(call.turnId, call.callId, { name: call.name, input: call.input, status: 'running' });
+  patchPart(call.turnId, call.callId, { name: call.name, input: call.input, status: 'running', startedAt: Date.now() });
+  const ac = new AbortController();
+  controllers.set(call.callId, ac);
   let r;
   try {
-    r = await impl(call.input || {}, call);
+    r = await impl(call.input || {}, call, ac.signal);
   } catch (err) {
     r = { isError: true, content: String((err && err.message) || err) };
+  } finally {
+    controllers.delete(call.callId);
   }
   if (typeof r === 'string') r = { content: r };
   programs.delete(call.callId);
-  reply(r.content, r.isError);
+  reply(r.content, r.isError, r.images);
   // A call the main process already closed (stop, timeout) keeps the state it got then.
   patchPart(call.turnId, call.callId, (p) => (p && p.status !== 'running' ? null : {
     status: r.isError ? 'error' : 'done',
@@ -121,6 +155,15 @@ async function onAiTool(call) {
 
 const fail = (content, summary) => ({ isError: true, content, summary });
 const json = (obj, summary) => ({ content: JSON.stringify(obj), summary });
+
+/** Java (the JVM that runs the code) did not start: that is no compile error, and no code change helps. */
+function benchFailed(reason) {
+  const r = reason || getState().bench.error || { code: 'unknown' };
+  return {
+    ...json({ ok: false, javaStarted: false, reason: r.code || 'unknown', detail: A.benchReasonText(r), note: 'The code compiled, but Java could not start to run it. This is not a compile error: do not change the code for it. Tell the student the reason in one sentence.' }, t('agent.sum.benchFailed')),
+    isError: true,
+  };
+}
 
 /** A class by qualified name, or by simple name when that is unique. */
 function classOf(model, name) {
@@ -247,6 +290,171 @@ async function runJava(callId, promise, ms) {
 }
 
 const pausedResult = (r) => json(r, t('agent.sum.paused'));
+
+// ------------------------------------------------------------------ the program out of sight (look_at_program, use_program)
+
+const SHOT_WIDTH = 800; // screenshots for the model and the chat: at most this wide
+const MAX_SHOTS = 40; // kept per chat for the thumbnails
+let session = null; // { turnId, cls, callIds } the program the tutor started out of sight
+let shotSeq = 0;
+
+const sleep = (ms, signal) => new Promise((resolve) => {
+  if (signal && signal.aborted) return resolve(false);
+  const timer = setTimeout(() => resolve(true), ms);
+  if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); resolve(false); }, { once: true });
+});
+const benchRunning = (s = getState()) => s.bench.state === 'running' || s.bench.state === 'waiting';
+
+/** The class to start: the one named, else the only main class that builds a window, else the only main class. */
+function mainClassFor(name) {
+  const s = getState();
+  const model = projectModel(s.files);
+  const mains = model.list.filter((c) => c.hasMain);
+  const names = listOf(mains.map((x) => x.fileClass)) || 'none';
+  if (name) {
+    const c = classOf(model, name);
+    if (!c) return { error: `No class ${name}. Classes with main: ${names}` };
+    if (!c.hasMain) return { error: `${c.simple} has no main method. Classes with main: ${names}` };
+    return { cls: c.fileClass };
+  }
+  const gui = mains.filter((c) => GUI_SRC.test((s.files[c.file] || {}).content || ''));
+  const pick = gui.length === 1 ? gui[0] : mains.length === 1 ? mains[0] : null;
+  if (!pick) return { error: mains.length ? `Several classes have main (${names}); say which one with class.` : 'No class has a main method.' };
+  return { cls: pick.fileClass };
+}
+
+/**
+ * Ends the tutor's program: its windows close (the program ends like a student closing them),
+ * whatever still runs is stopped, and new windows open in sight again. `force` stops at once.
+ */
+async function endSession(force = false) {
+  const s = session;
+  if (!s) return;
+  session = null;
+  try {
+    if (!force && getState().bench.live) {
+      await A.closeProgramWindows();
+      await untilState((st) => !st.bench.live, 2500);
+    }
+    const st = getState();
+    // Stopped by the student: the console says so; a program closed after looking ends quietly.
+    if (st.bench.live || benchRunning(st)) await A.stopProgram({ quiet: !force });
+    // Its windows are closed, but a game's Swing timer ticks on in the JVM (its thread is a
+    // daemon, so the program counts as ended). With nothing on the bench, a fresh JVM ends it.
+    else await A.recycleBench();
+  } catch { /* the bench is gone already */ }
+  if (!session) await A.setProgramOffscreen(false);
+}
+
+/** The student started a program of their own: the tutor's look is over, its windows are not the tutor's. */
+export function releaseProgram() {
+  session = null;
+}
+
+/** A screenshot of the program's front window, kept for the chat's thumbnails. */
+async function shoot(call, label) {
+  const cap = await A.captureWindow({ maxWidth: SHOT_WIDTH });
+  if (!cap || cap.error) return { error: (cap && cap.error) || 'No window.', code: cap && cap.code };
+  const id = `shot${++shotSeq}`;
+  const shot = { png: cap.png, title: cap.title || '', width: cap.width, height: cap.height, scale: cap.scale || 1, label: label || '', turnId: call.turnId, callId: call.callId, at: Date.now() };
+  setState((s) => {
+    const all = { ...(s.agentShots || {}), [id]: shot };
+    const keys = Object.keys(all);
+    for (const k of keys.slice(0, Math.max(0, keys.length - MAX_SHOTS))) delete all[k];
+    return { agentShots: all };
+  });
+  patchPart(call.turnId, call.callId, (p) => (p ? { shots: [...(p.shots || []), id] } : null));
+  return { id, ...shot };
+}
+
+const imageOf = (shot) => ({ media_type: 'image/png', data: shot.png });
+
+/** What a screenshot tells the model besides the picture: size and how to click into it. */
+function shotInfo(shot) {
+  return compact({
+    title: shot.title,
+    width: shot.width,
+    height: shot.height,
+    scale: shot.scale < 1 ? Math.round(shot.scale * 1000) / 1000 : null,
+  });
+}
+
+/**
+ * Starts the program out of sight for look_at_program / use_program and waits for its first window.
+ * Resolves { ok: true } or { result } (what the tool answers instead: compile errors, an exception,
+ * a program without a window).
+ */
+async function openProgram(input, call, signal) {
+  const s = getState();
+  if (benchRunning(s) && !s.bench.live) return { result: fail('A program is running or waits for input. Ask the student to stop it first.') };
+  const pick = mainClassFor(input.class);
+  if (pick.error) return { result: fail(pick.error) };
+  if (session) await endSession(false);
+  // Compiling and starting Java first, outside the 15 s for main(): on a slow school PC that
+  // alone can take longer, and it says nothing about the program.
+  if (!(await A.ensureCompiled())) return { result: A.notReadyReason() === 'bench' ? benchFailed() : { ...compileResult(false), isError: true } };
+  if (signal.aborted) return { result: fail('Stopped.') };
+  const mark = consoleMark();
+  const exBefore = getState().exception;
+  if (!(await A.setProgramOffscreen(true))) return { result: fail('BlackJ could not start the program out of sight.') };
+  session = { turnId: call.turnId, cls: pick.cls, callIds: new Set([call.callId]) };
+  const stopper = new AbortController();
+  let timer = null;
+  let begin;
+  const timeout = new Promise((resolve) => { begin = () => { timer = setTimeout(() => resolve({ timedOut: true }), 15000); }; });
+  const waiting = untilState((st) => st.bench.state === 'waiting', 0, stopper.signal).then((hit) => (hit ? { waitingForInput: true } : new Promise(() => {})));
+  const stopped = new Promise((resolve) => (signal.aborted ? resolve({ stopped: true }) : signal.addEventListener('abort', () => resolve({ stopped: true }), { once: true })));
+  const r = await Promise.race([A.runMain(pick.cls, { quiet: true, onStart: begin }), untilPaused(stopper.signal), timeout, waiting, stopped]).finally(() => {
+    stopper.abort();
+    clearTimeout(timer);
+  });
+  const output = () => consoleSince(mark, 1500);
+  const exception = () => (getState().exception && getState().exception !== exBefore ? exceptionLine(getState().exception) : null);
+  if (r.stopped) {
+    await endSession(true);
+    return { result: fail('Stopped.') };
+  }
+  if (r.benchFailed) {
+    await endSession(true);
+    return { result: benchFailed(r.benchFailed) };
+  }
+  if (r.compileFailed) {
+    await endSession(true);
+    return { result: { ...compileResult(false), isError: true } };
+  }
+  if (r.paused || r.timedOut || r.waitingForInput) {
+    await endSession(true);
+    const why = r.paused ? 'It stopped at a breakpoint the student set; it was stopped. Ask the student to remove the breakpoint, or read the code instead.'
+      : r.waitingForInput ? 'It waits for console input instead of opening a window. Use run_main with input for console programs.'
+        : 'main did not return within 15 s; the program was stopped. Start the window with SwingUtilities.invokeLater and return from main.';
+    return { result: json(compact({ class: simpleName(pick.cls), window: false, note: why, output: output() }), t('agent.sum.noWindow')) };
+  }
+  if (r.exception || r.error) {
+    await endSession(true);
+    return { result: json(compact({ class: simpleName(pick.cls), window: false, exception: r.exception ? exceptionLine(r.exception) : null, error: r.error, output: output() }), r.exception ? t('agent.sum.exception', { type: r.exception.simpleType }) : t('agent.sum.noWindow')) };
+  }
+  // main returned; a window built with invokeLater may still be on its way.
+  const start = Date.now();
+  const patience = r.stillRunning ? 4000 : 700;
+  let wins = await A.programWindows();
+  while (!wins.length && Date.now() - start < patience && !signal.aborted) {
+    await sleep(150, signal);
+    wins = await A.programWindows();
+  }
+  if (!wins.length) {
+    const ex = exception();
+    await endSession(false);
+    return { result: json(compact({ class: simpleName(pick.cls), window: false, note: ex ? 'The program crashed before its window opened.' : 'main finished without opening a window. For console programs use run_main.', exception: ex, output: output() }), ex ? t('agent.sum.crashed') : t('agent.sum.noWindow')) };
+  }
+  return { ok: true, cls: pick.cls, windows: wins, mark, exBefore };
+}
+
+/** The tool is done with the program: it keeps running for the next call, or ends now. */
+async function leaveProgram(keep, signal) {
+  if (keep && session && !(signal && signal.aborted) && getState().bench.live) return true;
+  await endSession(!!(signal && signal.aborted));
+  return false;
+}
 
 // ------------------------------------------------------------------ the project as the agent sees it
 
@@ -510,10 +718,26 @@ const TOOL_IMPL = {
     const mains = model.list.filter((x) => x.hasMain).map((x) => x.fileClass);
     if (!c) return fail(`No class ${input.class}. Classes with main: ${listOf(mains) || 'none'}`);
     if (!c.hasMain) return fail(`${c.simple} has no main method. Classes with main: ${listOf(mains) || 'none'}`);
+    if (session) await endSession(false);
     const mark = consoleMark();
     const secs = input.timeout_s || 10;
-    const r = await runJava(call.callId, A.runMain(c.fileClass, { input: input.input || [], timeoutMs: secs * 1000 }), 0);
+    // A window it opens stays out of sight and is closed again: the tutor looks with look_at_program.
+    await A.setProgramOffscreen(true);
+    let r;
+    try {
+      r = await runJava(call.callId, A.runMain(c.fileClass, { input: input.input || [], timeoutMs: secs * 1000, quiet: true }), 0);
+    } finally {
+      if (r && r.stillRunning) {
+        await A.closeProgramWindows();
+        await untilState((st) => !st.bench.live, 2500);
+        if (getState().bench.live) await A.stopProgram({ quiet: true });
+        // A Swing timer may tick on after its window closed.
+        else await A.recycleBench();
+      }
+      if (!session) await A.setProgramOffscreen(false);
+    }
     if (r && r.paused) return pausedResult(r);
+    if (r.benchFailed) return benchFailed(r.benchFailed);
     if (r.compileFailed) return { ...compileResult(false), isError: true };
     const out = compact({
       finished: r.finished,
@@ -522,10 +746,127 @@ const TOOL_IMPL = {
       output: consoleSince(mark, 4000),
       exception: r.exception ? exceptionLine(r.exception) : null,
       error: r.error,
+      window: r.stillRunning ? { titles: r.windows, note: 'It opened a window, closed again now. See it with look_at_program, try it with use_program.' } : null,
     });
     out.finished = !!r.finished;
     const summary = r.timedOut ? t('agent.sum.timedOut', { s: secs }) : r.exception ? t('agent.sum.exception', { type: r.exception.simpleType }) : t('agent.sum.ran');
     return { ...json(out, summary), isError: !!r.error };
+  },
+
+  update_plan: ({ items }, call) => {
+    const plan = items.map((x) => ({ text: x.text, status: x.status }));
+    patchTurn(call.turnId, (turn) => ({ ...turn, plan, planAt: Date.now() }));
+    const done = plan.filter((x) => x.status === 'done').length;
+    return { content: `Checklist updated: ${done} of ${plan.length} done.`, summary: '' };
+  },
+
+  look_at_program: async (input, call, signal) => {
+    const open = await openProgram(input, call, signal);
+    if (!open.ok) return open.result;
+    try {
+      await sleep(input.wait_ms != null ? input.wait_ms : 800, signal);
+      if (signal.aborted) return fail('Stopped.');
+      const first = await shoot(call, t('agent.shot.start'));
+      if (first.error) return fail(`The window could not be captured: ${first.error}`);
+      const shots = [first];
+      let resized = null;
+      if (input.resize_to && !signal.aborted) {
+        const r = await A.sendProgramInput({ events: [{ type: 'resize', width: input.resize_to.width, height: input.resize_to.height }] });
+        await sleep(250, signal);
+        const second = r && !r.error ? await shoot(call, t('agent.shot.resized')) : null;
+        if (second && !second.error) shots.push(second);
+        resized = compact({ to: input.resize_to, resizable: r && r.notResizable ? false : null, error: r && r.error ? r.error : null, note: r && r.notResizable ? 'The window is not resizable (setResizable(false)); students expect to resize it.' : null });
+      }
+      const ex = getState().exception && getState().exception !== open.exBefore ? exceptionLine(getState().exception) : null;
+      const kept = await leaveProgram(input.keep_running, signal);
+      const out = compact({
+        class: simpleName(open.cls),
+        window: shotInfo(first),
+        otherWindows: open.windows.length > 1 ? open.windows.slice(0, 5).map((w) => w.title || '') : null,
+        resized,
+        exception: ex,
+        output: consoleSince(open.mark, 1500),
+        screenshots: shots.length,
+        keptRunning: kept || null,
+        note: first.scale < 1 ? `Screenshots are scaled by ${shotInfo(first).scale}: divide image coordinates by it for use_program.` : null,
+      });
+      return { content: JSON.stringify(out), images: shots.map(imageOf), summary: ex ? t('agent.sum.crashed') : `${first.width}×${first.height}` };
+    } finally {
+      if (signal.aborted || !(session && input.keep_running)) await endSession(signal.aborted);
+    }
+  },
+
+  use_program: async (input, call, signal) => {
+    let mark = consoleMark();
+    let exBefore = getState().exception;
+    const reuse = session && session.turnId === call.turnId && !input.class && getState().bench.live;
+    if (reuse) session.callIds.add(call.callId);
+    else {
+      const open = await openProgram(input, call, signal);
+      if (!open.ok) return open.result;
+      mark = open.mark;
+      exBefore = open.exBefore;
+      await sleep(400, signal);
+    }
+    try {
+      const shots = [];
+      let batch = [];
+      let delivered = 0;
+      let problem = null;
+      let fixed = false;
+      const flush = async () => {
+        if (!batch.length) return;
+        const r = await A.sendProgramInput({ events: batch });
+        batch = [];
+        if (!r || r.error) problem = r ? { error: r.error, code: r.code } : { error: 'no answer' };
+        else {
+          delivered += r.delivered || 0;
+          if (r.notResizable) fixed = true;
+        }
+      };
+      for (const st of input.steps) {
+        if (signal.aborted || problem) break;
+        if (st.do === 'shot') {
+          await flush();
+          if (problem) break;
+          const s = await shoot(call, t('agent.shot.frame', { n: shots.length + 1 }));
+          if (s.error) problem = { error: s.error, code: s.code };
+          else shots.push(s);
+          continue;
+        }
+        batch.push(st.do === 'key' ? compact({ type: 'key', key: st.key, holdMs: st.hold_ms })
+          : st.do === 'type' ? { type: 'type', text: st.text }
+            : st.do === 'click' ? compact({ type: 'click', x: st.x, y: st.y, button: st.button })
+              : st.do === 'move' ? { type: 'move', x: st.x, y: st.y }
+                : st.do === 'resize' ? { type: 'resize', width: st.width, height: st.height }
+                  : { type: 'wait', ms: st.ms });
+      }
+      if (!problem && !signal.aborted) await flush();
+      if (signal.aborted) return fail('Stopped.');
+      const closed = problem && problem.code === 'noWindow';
+      if (!closed) {
+        const end = await shoot(call, t('agent.shot.end'));
+        if (!end.error) shots.push(end);
+      }
+      const ex = getState().exception && getState().exception !== exBefore ? exceptionLine(getState().exception) : null;
+      const last = shots[shots.length - 1];
+      const kept = !closed && (await leaveProgram(input.keep_running, signal));
+      const out = compact({
+        delivered,
+        window: last ? shotInfo(last) : null,
+        windowClosed: closed || null,
+        error: problem && !closed ? problem.error : null,
+        notResizable: fixed || null,
+        exception: ex,
+        output: consoleSince(mark, 2000),
+        screenshots: shots.length,
+        keptRunning: kept || null,
+      });
+      const summary = closed ? t('agent.sum.closed') : ex ? t('agent.sum.crashed') : t('agent.sum.played', { n: delivered });
+      return { content: JSON.stringify(out), images: shots.map(imageOf), summary, isError: !!(problem && !closed && !shots.length) };
+    } finally {
+      if (signal.aborted || !(session && input.keep_running)) await endSession(signal.aborted);
+    }
   },
 
   create_object: async (input, call) => {
@@ -534,7 +875,7 @@ const TOOL_IMPL = {
     const model = projectModel(getState().files);
     const c = classOf(model, input.class);
     if (!c) return fail(`No class ${input.class}. Classes: ${listOf(model.names)}`);
-    if (!(await A.ensureCompiled())) return { ...compileResult(false), isError: true };
+    if (!(await A.ensureCompiled())) return A.notReadyReason() === 'bench' ? benchFailed() : { ...compileResult(false), isError: true };
     const desc = await A.describe(c.fileClass);
     if (!desc) return fail(`Could not read the class ${c.simple}.`);
     if (desc.kind !== 'class' || c.abstract) return fail(`${c.simple} is ${desc.kind === 'interface' ? 'an interface' : 'abstract'}. Create an object of a class that implements or extends it.`);
@@ -569,7 +910,7 @@ const TOOL_IMPL = {
     } else {
       const c = classOf(model, input.class);
       if (!c) return fail(`No class ${input.class}. Classes: ${listOf(model.names)}`);
-      if (!(await A.ensureCompiled())) return { ...compileResult(false), isError: true };
+      if (!(await A.ensureCompiled())) return A.notReadyReason() === 'bench' ? benchFailed() : { ...compileResult(false), isError: true };
       cls = c.fileClass;
     }
     const desc = await A.describe(cls);
@@ -688,6 +1029,7 @@ function settle(p, result, noteKey) {
 
 function propose(change, call) {
   const id = 'p' + call.callId;
+  ensureCheckpoint(call.turnId);
   const s = getState();
   // Build mode writes straight away (the student undoes the whole build with one click); explain
   // mode only when the student allowed it in the settings. Deleting always asks.
@@ -720,7 +1062,7 @@ function propose(change, call) {
         return fail(err);
       }
       setProposal(id, { status: 'applied', after, appliedAt: Date.now() });
-      return json({ status: 'applied', file: change.file, lines: change.after.split('\n').length, note: 'The student can undo it.' }, summary);
+      return json({ status: 'applied', file: change.file, lines: change.after.split('\n').length, note: 'The student can undo it.', ...(GUI_SRC.test(after) ? { gui: true } : {}) }, summary);
     });
   }
   return new Promise((resolve) => {
@@ -790,7 +1132,7 @@ export async function acceptProposal(id, text) {
       return;
     }
     setProposal(id, { status: 'accepted', after, appliedAt: Date.now() });
-    settle(p, { content: JSON.stringify({ status: 'accepted', file: p.file, ...(after !== p.after ? { note: 'The student adjusted the change before applying it. Re-read the file.' } : {}) }) }, 'agent.note.accepted');
+    settle(p, { content: JSON.stringify({ status: 'accepted', file: p.file, ...(after !== p.after ? { note: 'The student adjusted the change before applying it. Re-read the file.' } : {}), ...(GUI_SRC.test(after) ? { gui: true } : {}) }) }, 'agent.note.accepted');
   } finally {
     busyIds.delete(id);
     if (getProposal(id)) setProposal(id, { busy: false });
@@ -862,8 +1204,81 @@ export function canUndo(p, proposals) {
   return !Object.values(proposals).some((q) => q.file === p.file && q.id !== p.id && (q.appliedAt || 0) > (p.appliedAt || 0) && q.status !== 'rejected' && q.status !== 'cancelled' && q.status !== 'conflict');
 }
 
+// ------------------------------------------------------------------ checkpoints: the project before each turn
+
+// turnId -> { at, dir, files: { name: { content, className } } }: the project's files right
+// before the tutor's first change in that turn. Kept here (not in the store, which goes to the
+// pop-out windows on every change); the turn only carries `checkpoint: { at }`.
+const snapshots = new Map();
+
+function ensureCheckpoint(turnId) {
+  const s = getState();
+  if (snapshots.has(turnId) || !s.project) return;
+  const files = {};
+  for (const f of Object.values(s.files)) files[f.name] = { content: f.content, className: f.className };
+  const at = Date.now();
+  snapshots.set(turnId, { at, dir: s.project.dir, files });
+  patchTurn(turnId, (turn) => ({ ...turn, checkpoint: { at } }));
+}
+
+/** What going back to before this turn would do: { change, create, remove } file names, or { error }. */
+export function checkpointPreview(turnId) {
+  const snap = snapshots.get(turnId);
+  const s = getState();
+  if (!snap) return { error: 'gone' };
+  if (!s.project || s.project.dir !== snap.dir) return { error: 'project' };
+  const now = s.files;
+  return {
+    change: Object.keys(snap.files).filter((n) => now[n] && now[n].content !== snap.files[n].content),
+    create: Object.keys(snap.files).filter((n) => !now[n]),
+    remove: Object.keys(now).filter((n) => !snap.files[n]),
+  };
+}
+
+/**
+ * Zurücksetzen: every file goes back to how it was before this turn changed anything, including
+ * the student's own edits since then. Classes created later go to the recycle bin, deleted ones
+ * come back. The tutor learns about it with the next message.
+ */
+export async function restoreCheckpoint(turnId) {
+  const plan = checkpointPreview(turnId);
+  if (plan.error) return plan;
+  if (getState().chat.busy) return { error: 'busy' };
+  const snap = snapshots.get(turnId);
+  if (session) await endSession(true);
+  for (const name of plan.remove) {
+    const f = getState().files[name];
+    if (f) await A.deleteClass(f.className);
+  }
+  for (const name of plan.change) {
+    A.editFile(name, snap.files[name].content);
+    await A.saveFile(name);
+  }
+  for (const name of plan.create) {
+    const r = await api.project.createClass({ className: snap.files[name].className, content: snap.files[name].content });
+    if (r.ok) A.addCreatedFile(r.result);
+  }
+  // Changes of this turn and every later one are no longer in the files.
+  const turns = getState().chat.turns;
+  const from = turns.findIndex((x) => x.id === turnId);
+  const later = new Set(turns.slice(from).map((x) => x.id));
+  for (const p of Object.values(getState().agent.proposals)) {
+    if (later.has(p.turnId) && ['applied', 'accepted', 'pending', 'open'].includes(p.status)) {
+      if (p.status === 'pending' || p.status === 'open') settle(p, { isError: true, content: 'The student restored an earlier state.' });
+      setProposal(p.id, { status: 'undone' });
+    }
+  }
+  const asked = from > 0 && turns[from - 1].role === 'user' ? turns[from - 1].text : '';
+  patchTurn(turnId, (turn) => ({ ...turn, restoredAt: Date.now() }));
+  setState((s) => ({ chat: { ...s.chat, notes: [...(s.chat.notes || []), t('agent.note.restored', { text: asked.length > 80 ? asked.slice(0, 80) + '…' : asked })] } }));
+  return { changed: plan.change.length + plan.create.length + plan.remove.length };
+}
+
 /** New chat, closed project: what is still waiting is cancelled. */
 export function closeProposals() {
+  snapshots.clear();
+  if (session) endSession(true);
+  if (getState().agentShots) setState({ agentShots: null });
   const list = Object.values(getState().agent.proposals);
   if (!list.length) return;
   for (const p of list) {
@@ -891,10 +1306,32 @@ export function waitingForStudent(s = getState()) {
 const WRITES = new Set(['create_class', 'write_file', 'edit_file', 'delete_class']);
 export const isWriteTool = (name) => WRITES.has(name);
 
+/** The project file a tool call is about (for the chip that opens it), or null. */
+export function fileOfPart(part) {
+  const i = part.input;
+  if (!i) return null;
+  if (i.path && !isReadme(i.path)) return i.path;
+  if ((part.name === 'create_class' || part.name === 'delete_class') && i.name) return fileOfClass(i.name);
+  return null;
+}
+
+/** What kind of work a tool does, for its glyph in the chat. */
+export function toolKind(name) {
+  if (['get_project', 'read_file', 'search_code', 'inspect_object'].includes(name)) return 'read';
+  if (WRITES.has(name)) return 'write';
+  if (name === 'compile') return 'compile';
+  if (name === 'run_tests') return 'test';
+  if (['run_main', 'create_object', 'call_method'].includes(name)) return 'run';
+  if (name === 'look_at_program') return 'look';
+  if (name === 'use_program') return 'play';
+  if (name === 'update_plan') return 'plan';
+  return 'point';
+}
+
 /** "Liest Hund.java": the row label of a tool call, with its input filled in. */
 export function toolLabel(part, tr) {
   const i = part.input;
-  if (!i) return tr('agent.toolShort.' + part.name);
+  if (!i || ((part.name === 'look_at_program' || part.name === 'use_program') && !i.class)) return tr('agent.toolShort.' + part.name);
   const key = 'agent.tool.' + (part.name === 'write_file' ? 'edit_file' : part.name);
   return tr(key, {
     file: fileLabel(i.path),

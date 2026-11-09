@@ -55,8 +55,8 @@ export default function CommandPalette() {
       cmd(t('ws.compile'), A.compile, 'ctrl K', 'build');
       for (const c of model.list.filter((x) => x.hasMain)) cmd(`${t('ws.runMain')}: ${c.simple}`, () => A.runMain(c.fileClass), 'F5', 'play');
       cmd(t('ws.newClass'), () => A.openDialogBox({ type: 'newClass' }), 'ctrl N', 'plus');
-      cmd(t('diagram.newPackage'), () => A.openDialogBox({ type: 'newPackage' }), '', 'folder');
-      if (model.list.some((c) => c.isTest)) cmd(t('tests.runAll'), () => A.runTests({ all: true }), '', 'check');
+      cmd(t('diagram.newPackage'), () => A.openDialogBox({ type: 'newPackage' }), '', 'folderPlus');
+      if (model.list.some((c) => c.isTest)) cmd(t('tests.runAll'), () => A.runTests({ all: true }), '', 'flask');
       cmd(t('pad.open'), () => setState({ dock: 'pad' }), '', 'terminal');
       cmd(t('lib.title'), () => A.openDialogBox({ type: 'library' }), '', 'book');
       if (!project.readOnly) cmd(t('addFiles.title'), () => A.addClassesFromFiles(), '', 'file');
@@ -65,8 +65,8 @@ export default function CommandPalette() {
       cmd(t('jar.title'), () => A.openDialogBox({ type: 'jar' }), '', 'save');
       cmd(t('zip.export'), () => A.exportZip(), '', 'save');
       cmd(t('ws.reset'), A.stopProgram, '', 'reset');
-      if (!s.settings.aiOff) cmd(t('ai.write'), () => setState({ aiPrompt: { at: Date.now() } }), 'ctrl I', 'pencil');
-      if (!s.settings.aiOff) cmd(t('cmd.aiInline'), () => A.updateSettings({ aiInline: !s.settings.aiInline }), '', 'pencil');
+      if (!s.settings.aiOff) cmd(t('ai.write'), () => setState({ aiPrompt: { at: Date.now() } }), 'ctrl I', 'wand');
+      if (!s.settings.aiOff) cmd(t('cmd.aiInline'), () => A.updateSettings({ aiInline: !s.settings.aiInline }), '', 'spark');
       cmd(t('menu.readme'), A.openReadme, '', 'file');
       cmd(t('ws.reveal'), () => window.blackj.project.reveal(), '', 'folderOpen');
       for (const it of viewMenu(t, s.layout.detached)) if (it.label && !it.disabled) cmd(it.label, it.onClick, '', it.icon);
@@ -75,6 +75,7 @@ export default function CommandPalette() {
     cmd(t('home.openButton'), A.openDialog, '', 'folderOpen');
     cmd(t('zip.open'), A.openZip, '', 'folderOpen');
     cmd(t('nav.learn'), () => A.go('learn'), '', 'book');
+    cmd(t('shortcuts.title'), () => setState({ shortcuts: true }), 'F1', 'keyboard');
     for (const ex of s.info.exercises || []) cmd(`${t('exercise.palette')}: ${ex.title}`, () => A.openExercise(ex.id), ex.topic.split(',')[0], 'check');
     cmd(t('nav.settings'), () => A.go('settings'), '', 'gear');
     cmd(s.settings.theme === 'dark' ? t('palette.light') : t('palette.dark'), () => A.updateSettings({ theme: s.settings.theme === 'dark' ? 'light' : 'dark' }), '', 'sun');
@@ -103,7 +104,7 @@ export default function CommandPalette() {
       for (const c of CONCEPTS) {
         const title = (c[lang] || c.de)[0];
         const sc = score(query, title);
-        if (sc > 400) out.push({ kind: 'concept', label: title, hint: t('nav.learn'), sc: sc - 150, icon: 'book', run: () => { setState({ learnConcept: c.id }); A.go('learn'); } });
+        if (sc > 400) out.push({ kind: 'concept', label: title, hint: t('nav.learn'), sc: sc - 150, icon: 'bulb', run: () => { setState({ learnConcept: c.id }); A.go('learn'); } });
       }
     }
     return out.sort((a, b) => b.sc - a.sc).slice(0, 40);
@@ -137,11 +138,16 @@ export default function CommandPalette() {
           {items.length === 0 && <div className="palette-empty">{t('palette.noResults')}</div>}
           {items.map((it, i) => (
             <button key={it.kind + it.label + i} className={'palette-item' + (i === sel ? ' sel' : '')} role="option" aria-selected={i === sel} onMouseEnter={() => setSel(i)} onClick={() => run(it)}>
-              <Icon name={it.icon || 'file'} />
+              <span className="pi-ico"><Icon name={it.icon || 'file'} /></span>
               <span className="pi-label">{it.label}</span>
               {it.keys ? <kbd>{formatKeys(lang, it.keys)}</kbd> : <span className="pi-hint">{it.hint}</span>}
             </button>
           ))}
+        </div>
+        <div className="palette-foot" aria-hidden="true">
+          <span><kbd>↑</kbd><kbd>↓</kbd>{t('design.palette.move')}</span>
+          <span><kbd>↵</kbd>{t('design.palette.run')}</span>
+          <span><kbd>Esc</kbd>{t('design.palette.close')}</span>
         </div>
       </div>
     </div>

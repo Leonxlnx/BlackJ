@@ -47,8 +47,23 @@ import java.util.concurrent.TimeUnit;
  */
 public class BlackJBench {
 
-    static PrintStream proto;
+    /**
+     * Starts every protocol line. BlackJ reads only what follows it, so text that reaches the real
+     * stdout some other way (a program writing to FileDescriptor.out, a JVM warning, the JDWP
+     * banner) can never break a message. JSON escapes control characters, so it never occurs inside one.
+     */
+    static final String MARK = "\u001e";
+    static FileOutputStream proto;
     static final Object PROTO_LOCK = new Object();
+    /** Guards busy and the "running" events, so a new call can never overtake the end of the last one. */
+    static final Object RUN_LOCK = new Object();
+    /** The JVM's own main thread: it reads the protocol and is no thread of the student's program. */
+    static Thread protoThread;
+    static volatile boolean quitting = false;
+    /** While on, new windows of the program open at -4000,-4000 and stay behind (the tutor's own test runs). */
+    static volatile boolean offscreen = false;
+    /** The last "program" state sent: open windows and live threads. */
+    static String liveKey = "{\"windows\":[],\"threads\":0}";
     static PadLoader loader;
     static File classDir;
     static String classpath;
@@ -58,9 +73,15 @@ public class BlackJBench {
     static final IdentityHashMap<Object, String> handleOf = new IdentityHashMap<>();
     static int handleSeq = 0;
 
+    /**
+     * Runs the student's code. Not a daemon: threads the program starts inherit that, so they keep
+     * the program alive as in a plain JVM (and BlackJ can tell it still runs).
+     */
+    static volatile Thread workerThread;
     static final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "main");
-        t.setDaemon(true);
+        t.setDaemon(false);
+        workerThread = t;
         return t;
     });
     static final ExecutorService helper = Executors.newCachedThreadPool(r -> {
@@ -74,9 +95,15 @@ public class BlackJBench {
     static final Map<String, Boolean> projectClassCache = new HashMap<>();
 
     public static void main(String[] args) throws Exception {
-        proto = new PrintStream(new FileOutputStream(FileDescriptor.out), true, "UTF-8");
-        userOut = new PrintStream(new EventStream("out"), true, "UTF-8");
-        userErr = new PrintStream(new EventStream("err"), true, "UTF-8");
+        protoThread = Thread.currentThread();
+        proto = new FileOutputStream(FileDescriptor.out);
+        // System.out.close() in one program must not silence the console for the next call.
+        userOut = new PrintStream(new EventStream("out"), true, "UTF-8") {
+            @Override public void close() { flush(); }
+        };
+        userErr = new PrintStream(new EventStream("err"), true, "UTF-8") {
+            @Override public void close() { flush(); }
+        };
         System.setOut(userOut);
         System.setErr(userErr);
         input = new InputQueue();
@@ -85,8 +112,11 @@ public class BlackJBench {
         Thread flusher = new Thread(() -> {
             while (true) {
                 try { Thread.sleep(40); } catch (InterruptedException e) { return; }
-                userOut.flush();
-                userErr.flush();
+                try {
+                    userOut.flush();
+                    userErr.flush();
+                    drainOut();
+                } catch (Throwable ignored) { /* next round */ }
             }
         }, "blackj-flush");
         flusher.setDaemon(true);
@@ -95,8 +125,24 @@ public class BlackJBench {
         windows.setDaemon(true);
         windows.start();
 
-        // args[0]: the compiled classes first, then libraries (+libs jars, JUnit), path-separator separated.
-        classpath = args.length > 0 ? args[0] : ".";
+        // A program that calls System.exit (or closes an EXIT_ON_CLOSE window) ends this JVM: say so,
+        // with everything it printed last, so BlackJ can tell that apart from a crash.
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (quitting) return;
+            try {
+                userOut.flush();
+                userErr.flush();
+                drainOut();
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("event", "shutdown");
+                send(m);
+            } catch (Throwable ignored) { /* BlackJ is gone already */ }
+        }, "blackj-exit"));
+
+        // The compiled classes first, then libraries (+libs jars, JUnit), path-separator separated.
+        // From the environment (wide characters on Windows: any folder name works), else args[0].
+        String fromEnv = System.getenv("BLACKJ_CP");
+        classpath = fromEnv != null && !fromEnv.isEmpty() ? fromEnv : args.length > 0 ? args[0] : ".";
         List<URL> urls = new ArrayList<>();
         for (String part : classpath.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
             if (part.isEmpty()) continue;
@@ -114,10 +160,28 @@ public class BlackJBench {
 
         BufferedReader in = new BufferedReader(new InputStreamReader(new FileInputStream(FileDescriptor.in), StandardCharsets.UTF_8));
         String line;
-        while ((line = in.readLine()) != null) {
+        while (true) {
+            try {
+                line = in.readLine();
+            } catch (Throwable t) {
+                break;
+            }
+            if (line == null) break;
             if (line.trim().isEmpty()) continue;
-            handleLine(line);
+            try {
+                handleLine(line);
+            } catch (Throwable t) {
+                // Never let one bad request end the bench.
+            }
         }
+        // BlackJ closed the pipe (it quit or crashed): end, even if a shutdown hook of the program hangs.
+        quitting = true;
+        Thread halt = new Thread(() -> {
+            try { Thread.sleep(2000); } catch (InterruptedException ignored) { }
+            Runtime.getRuntime().halt(0);
+        }, "blackj-halt");
+        halt.setDaemon(true);
+        halt.start();
         System.exit(0);
     }
 
@@ -131,18 +195,73 @@ public class BlackJBench {
     static void watchWindows() {
         while (true) {
             try { Thread.sleep(150); } catch (InterruptedException e) { return; }
-            if (!awtRunning()) continue;
-            try { Front.check(); } catch (Throwable ignored) { /* a window went away meanwhile */ }
+            try {
+                if (awtRunning()) Front.check();
+            } catch (Throwable ignored) { /* a window went away meanwhile */ }
+            try {
+                reportLive();
+            } catch (Throwable ignored) { /* next round */ }
         }
     }
 
-    static boolean awtRunning() {
+    static Thread[] allThreads() {
         ThreadGroup g = Thread.currentThread().getThreadGroup();
         while (g.getParent() != null) g = g.getParent();
         Thread[] all = new Thread[g.activeCount() + 16];
         int n = g.enumerate(all, true);
-        for (int i = 0; i < n; i++) if (all[i] != null && all[i].getName().startsWith("AWT-EventQueue")) return true;
+        return Arrays.copyOf(all, n);
+    }
+
+    static boolean awtRunning() {
+        for (Thread t : allThreads()) if (t != null && t.getName().startsWith("AWT-EventQueue")) return true;
         return false;
+    }
+
+    /**
+     * Threads of the student's program that keep it alive after main() or a method call returned
+     * (a game loop, a java.util.Timer, a thread waiting for input). Daemon threads end with the
+     * program anyway; AWT's own threads count through the windows instead.
+     */
+    static int userThreads() {
+        int n = 0;
+        for (Thread t : allThreads()) {
+            if (t == null || t == protoThread || t == workerThread || !t.isAlive() || t.isDaemon()) continue;
+            String name = t.getName();
+            if (name.startsWith("AWT-") || name.equals("DestroyJavaVM") || name.startsWith("blackj-")) continue;
+            ThreadGroup g = t.getThreadGroup();
+            if (g == null || g.getName().equals("system")) continue;
+            n++;
+        }
+        return n;
+    }
+
+    /** The program as it lives on: its open windows ({ id, title }) and its own threads. */
+    static Map<String, Object> liveState() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        List<Object> wins = new ArrayList<>();
+        if (awtRunning()) {
+            try {
+                wins = Win.brief();
+            } catch (Throwable ignored) { /* no java.desktop, or a window went away meanwhile */ }
+        }
+        m.put("windows", wins);
+        m.put("threads", userThreads());
+        return m;
+    }
+
+    /** Sends a "program" event when the open windows or the program's threads changed. */
+    static void reportLive() {
+        // Looked at under the lock: the end of a call (which reports its own state) cannot slip
+        // in between and be overwritten by an older look.
+        synchronized (RUN_LOCK) {
+            Map<String, Object> live = liveState();
+            String key = Json.write(live);
+            if (key.equals(liveKey)) return;
+            liveKey = key;
+            live.put("event", "program");
+            live.put("busy", busy);
+            send(live);
+        }
     }
 
     /** Separate class, so java.awt is loaded only when the student's program uses it. */
@@ -179,8 +298,21 @@ public class BlackJBench {
 
         static void check() {
             for (java.awt.Window w : java.awt.Window.getWindows()) {
-                if (!w.isShowing() || seen.contains(w)) continue;
+                if (!w.isShowing()) continue;
+                if (offscreen && Win.hidden.contains(w)) {
+                    // Moved or maximized by the program after it opened: back out of sight.
+                    if (w.getX() > -3000 || w.getY() > -3000) java.awt.EventQueue.invokeLater(() -> Win.hide(w));
+                }
+                if (seen.contains(w)) continue;
                 seen.add(w);
+                if (offscreen) {
+                    java.awt.EventQueue.invokeLater(() -> {
+                        if (w.getIconImages().isEmpty()) w.setIconImages(icons());
+                        Win.hide(w);
+                    });
+                    sendWindowEvent(w);
+                    continue;
+                }
                 java.awt.EventQueue.invokeLater(() -> {
                     // Without its own icon the taskbar would show Java's coffee cup.
                     if (w.getIconImages().isEmpty()) w.setIconImages(icons());
@@ -194,12 +326,492 @@ public class BlackJBench {
                     t.setRepeats(false);
                     t.start();
                 });
-                String title = w instanceof java.awt.Frame ? ((java.awt.Frame) w).getTitle() : w instanceof java.awt.Dialog ? ((java.awt.Dialog) w).getTitle() : "";
-                Map<String, Object> ev = new LinkedHashMap<>();
-                ev.put("event", "window");
-                ev.put("title", title == null ? "" : title);
-                send(ev);
+                sendWindowEvent(w);
             }
+        }
+
+        static void sendWindowEvent(java.awt.Window w) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("event", "window");
+            ev.put("id", Win.idOf(w));
+            ev.put("title", Win.title(w));
+            send(ev);
+        }
+    }
+
+    /**
+     * The program's windows for the tutor: list them, render one into a PNG and send it keys and
+     * clicks. Everything goes through AWT's own event dispatch (no java.awt.Robot: the real mouse
+     * and keyboard are never touched), so it works for windows that are out of sight too.
+     * A separate class, so java.awt is loaded only when the program uses it.
+     */
+    static final class Win {
+        static final Map<java.awt.Window, Integer> ids = new java.util.WeakHashMap<>();
+        static final Set<java.awt.Window> hidden = java.util.Collections.synchronizedSet(java.util.Collections.newSetFromMap(new java.util.WeakHashMap<>()));
+        static int nextId = 1;
+        static boolean hooked = false;
+
+        static synchronized int idOf(java.awt.Window w) {
+            Integer i = ids.get(w);
+            if (i == null) {
+                i = nextId++;
+                ids.put(w, i);
+            }
+            return i;
+        }
+
+        static String title(java.awt.Window w) {
+            String t = w instanceof java.awt.Frame ? ((java.awt.Frame) w).getTitle() : w instanceof java.awt.Dialog ? ((java.awt.Dialog) w).getTitle() : "";
+            return t == null ? "" : t;
+        }
+
+        static List<java.awt.Window> open() {
+            List<java.awt.Window> out = new ArrayList<>();
+            for (java.awt.Window w : java.awt.Window.getWindows()) if (w.isShowing()) out.add(w);
+            return out;
+        }
+
+        /** For the "program" event: id and title only, so resizing a window sends nothing. */
+        static List<Object> brief() {
+            List<Object> out = new ArrayList<>();
+            for (java.awt.Window w : open()) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", idOf(w));
+                m.put("title", title(w));
+                out.add(m);
+            }
+            return out;
+        }
+
+        /** What the program draws on: the root pane of a Swing window, else the window inside its frame. */
+        static java.awt.Component content(java.awt.Window w) {
+            if (w instanceof javax.swing.RootPaneContainer) {
+                javax.swing.JRootPane r = ((javax.swing.RootPaneContainer) w).getRootPane();
+                if (r != null) return r;
+            }
+            return w;
+        }
+
+        static java.awt.Dimension contentSize(java.awt.Window w) {
+            java.awt.Component c = content(w);
+            if (c != w) return c.getSize();
+            java.awt.Insets in = w.getInsets();
+            return new java.awt.Dimension(Math.max(0, w.getWidth() - in.left - in.right), Math.max(0, w.getHeight() - in.top - in.bottom));
+        }
+
+        /** A point in content pixels as window coordinates. */
+        static java.awt.Point toWindow(java.awt.Window w, int x, int y) {
+            java.awt.Component c = content(w);
+            if (c != w) return javax.swing.SwingUtilities.convertPoint(c, x, y, w);
+            java.awt.Insets in = w.getInsets();
+            return new java.awt.Point(x + in.left, y + in.top);
+        }
+
+        static Map<String, Object> info(java.awt.Window w) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            java.awt.Dimension d = contentSize(w);
+            m.put("id", idOf(w));
+            m.put("title", title(w));
+            m.put("width", d.width);
+            m.put("height", d.height);
+            m.put("focused", w.isFocused());
+            m.put("kind", w instanceof java.awt.Dialog ? "dialog" : "frame");
+            return m;
+        }
+
+        static java.awt.Window find(Object id) throws BenchError {
+            List<java.awt.Window> open = open();
+            if (open.isEmpty()) throw new BenchError("noWindow");
+            if (id == null || "".equals(id)) {
+                // The window in front: a dialog the program waits for, else the newest one.
+                java.awt.Window best = open.get(open.size() - 1);
+                for (java.awt.Window w : open) if (w instanceof java.awt.Dialog && ((java.awt.Dialog) w).isModal()) best = w;
+                return best;
+            }
+            int want = (int) Double.parseDouble(String.valueOf(id));
+            for (java.awt.Window w : open) if (idOf(w) == want) return w;
+            throw new BenchError("noWindow", "id", String.valueOf(id));
+        }
+
+        /** Runs r on the event thread and waits for it, at most ms (the program may be busy or paused). */
+        static void onEdt(Runnable r, long ms) throws Exception {
+            if (java.awt.EventQueue.isDispatchThread()) {
+                r.run();
+                return;
+            }
+            java.util.concurrent.FutureTask<Void> f = new java.util.concurrent.FutureTask<>(r, null);
+            java.awt.EventQueue.invokeLater(f);
+            try {
+                f.get(ms, TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.TimeoutException e) {
+                throw new BenchError("windowBusy");
+            } catch (java.util.concurrent.ExecutionException e) {
+                Throwable c = e.getCause();
+                if (c instanceof Exception) throw (Exception) c;
+                throw new RuntimeException(c);
+            }
+        }
+
+        /** Lets the event thread finish what the program queued (a window built with invokeLater). */
+        /** False when the event thread did not get through what was queued in time (busy or paused). */
+        static boolean settle(long ms) {
+            long end = System.currentTimeMillis() + ms;
+            for (int round = 0; round < 2; round++) {
+                long left = end - System.currentTimeMillis();
+                if (left <= 0) return false;
+                try {
+                    onEdt(() -> { }, left);
+                } catch (Throwable busy) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // ---------------------------------------------------------------- out of sight
+
+        static void hide(java.awt.Window w) {
+            hidden.add(w);
+            if (w instanceof java.awt.Frame && ((java.awt.Frame) w).getExtendedState() != java.awt.Frame.NORMAL) ((java.awt.Frame) w).setExtendedState(java.awt.Frame.NORMAL);
+            if (w.getX() != -4000 || w.getY() != -4000) w.setLocation(-4000, -4000);
+        }
+
+        /**
+         * A window of an out-of-sight run never takes the keyboard focus from BlackJ, and a frame
+         * gets no taskbar button (its type can change only while it has no native peer yet).
+         * focusableWindowState stays: the key routing needs it.
+         */
+        static void quiet(java.awt.Window w) {
+            try {
+                if (w.isAutoRequestFocus()) w.setAutoRequestFocus(false);
+                if (w instanceof java.awt.Frame && !w.isDisplayable() && w.getType() == java.awt.Window.Type.NORMAL) w.setType(java.awt.Window.Type.UTILITY);
+            } catch (Throwable ignored) { /* a window that refuses: still moved out of sight */ }
+        }
+
+        /**
+         * Keeps each window of an out-of-sight run out of sight. A frame being built (a JFrame adds
+         * its root pane in its constructor) is made quiet; a window gets its native peer (and this
+         * event, synchronously) on pack() or right before Window.show() makes it visible, and is
+         * moved away then. A program that moves it back (pack(), setLocationRelativeTo(null),
+         * setVisible(true)) is caught synchronously when it is shown, and by every move after that.
+         */
+        static synchronized void hook() {
+            if (hooked) return;
+            hooked = true;
+            java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(e -> {
+                if (!offscreen) return;
+                Object src = e.getSource();
+                if (e instanceof java.awt.event.ContainerEvent) {
+                    if (src instanceof java.awt.Window && e.getID() == java.awt.event.ContainerEvent.COMPONENT_ADDED && !((java.awt.Window) src).isDisplayable()) quiet((java.awt.Window) src);
+                    return;
+                }
+                if (e instanceof java.awt.event.HierarchyEvent) {
+                    java.awt.event.HierarchyEvent h = (java.awt.event.HierarchyEvent) e;
+                    if (!(h.getChanged() instanceof java.awt.Window) || h.getChanged() != h.getComponent()) return;
+                    java.awt.Window w = (java.awt.Window) h.getChanged();
+                    long flags = h.getChangeFlags();
+                    if ((flags & java.awt.event.HierarchyEvent.DISPLAYABILITY_CHANGED) != 0 && w.isDisplayable() && !hidden.contains(w)) {
+                        quiet(w);
+                        hide(w);
+                    } else if ((flags & java.awt.event.HierarchyEvent.SHOWING_CHANGED) != 0 && w.isShowing() && hidden.contains(w)) hide(w);
+                    return;
+                }
+                if (!(src instanceof java.awt.Window) || !hidden.contains(src)) return;
+                int id = e.getID();
+                if (id == java.awt.event.ComponentEvent.COMPONENT_MOVED || id == java.awt.event.ComponentEvent.COMPONENT_SHOWN || id == java.awt.event.WindowEvent.WINDOW_OPENED) hide((java.awt.Window) src);
+            }, java.awt.AWTEvent.HIERARCHY_EVENT_MASK | java.awt.AWTEvent.CONTAINER_EVENT_MASK | java.awt.AWTEvent.COMPONENT_EVENT_MASK | java.awt.AWTEvent.WINDOW_EVENT_MASK);
+        }
+
+        // ---------------------------------------------------------------- commands
+
+        @SuppressWarnings("unchecked")
+        static Object run(String cmd, Map<String, Object> req) throws Exception {
+            switch (cmd) {
+                case "windows": {
+                    List<Object> list = new ArrayList<>();
+                    for (java.awt.Window w : open()) list.add(info(w));
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("windows", list);
+                    return r;
+                }
+                // "window": the window's id ("id" is the request's own).
+                case "capture":
+                    return capture(find(req.get("window")), req.get("maxWidth") instanceof Number ? ((Number) req.get("maxWidth")).intValue() : 1024);
+                case "input":
+                    return input(find(req.get("window")), req.get("events") instanceof List ? (List<Object>) req.get("events") : new ArrayList<>());
+                case "closeWindows": {
+                    final int[] n = { 0 };
+                    onEdt(() -> {
+                        for (java.awt.Window w : java.awt.Window.getWindows()) {
+                            if (!w.isDisplayable()) continue;
+                            if (w.isShowing()) n[0]++;
+                            w.dispose();
+                        }
+                    }, 3000);
+                    Map<String, Object> r = new LinkedHashMap<>();
+                    r.put("closed", n[0]);
+                    return r;
+                }
+                default:
+                    throw new BenchError("unknownCommand", "cmd", cmd);
+            }
+        }
+
+        static Map<String, Object> capture(final java.awt.Window w, int maxWidth) throws Exception {
+            final java.awt.image.BufferedImage[] shot = new java.awt.image.BufferedImage[1];
+            onEdt(() -> {
+                java.awt.Dimension d = contentSize(w);
+                java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(Math.max(1, d.width), Math.max(1, d.height), java.awt.image.BufferedImage.TYPE_INT_RGB);
+                java.awt.Graphics2D g = img.createGraphics();
+                java.awt.Color bg = w.getBackground();
+                g.setColor(bg != null ? bg : java.awt.Color.WHITE);
+                g.fillRect(0, 0, img.getWidth(), img.getHeight());
+                java.awt.Component c = content(w);
+                if (c == w) {
+                    java.awt.Insets in = w.getInsets();
+                    g.translate(-in.left, -in.top);
+                }
+                c.printAll(g);
+                g.dispose();
+                shot[0] = img;
+            }, 4000);
+            java.awt.image.BufferedImage img = shot[0];
+            int width = img.getWidth();
+            int height = img.getHeight();
+            double scale = 1;
+            int limit = Math.max(16, maxWidth);
+            if (width > limit) {
+                scale = (double) limit / width;
+                int sw = limit;
+                int sh = Math.max(1, (int) Math.round(height * scale));
+                java.awt.image.BufferedImage small = new java.awt.image.BufferedImage(sw, sh, java.awt.image.BufferedImage.TYPE_INT_RGB);
+                java.awt.Graphics2D g = small.createGraphics();
+                g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                g.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING, java.awt.RenderingHints.VALUE_RENDER_QUALITY);
+                g.drawImage(img, 0, 0, sw, sh, null);
+                g.dispose();
+                img = small;
+            }
+            ByteArrayOutputStream png = new ByteArrayOutputStream();
+            javax.imageio.ImageIO.write(img, "png", png);
+            Map<String, Object> r = info(w);
+            r.remove("focused");
+            r.remove("kind");
+            r.put("scale", scale);
+            r.put("imageWidth", img.getWidth());
+            r.put("imageHeight", img.getHeight());
+            r.put("png", java.util.Base64.getEncoder().encodeToString(png.toByteArray()));
+            return r;
+        }
+
+        // ---------------------------------------------------------------- keys and clicks
+
+        static final Map<String, String> KEY_ALIASES = new HashMap<>();
+        static {
+            String[][] a = { { "ESC", "ESCAPE" }, { "BACKSPACE", "BACK_SPACE" }, { "RETURN", "ENTER" }, { "DEL", "DELETE" },
+                { "ARROWLEFT", "LEFT" }, { "ARROWRIGHT", "RIGHT" }, { "ARROWUP", "UP" }, { "ARROWDOWN", "DOWN" },
+                { "PAGEUP", "PAGE_UP" }, { "PAGEDOWN", "PAGE_DOWN" }, { "CTRL", "CONTROL" }, { "CONTROLLEFT", "CONTROL" },
+                { "SHIFTLEFT", "SHIFT" }, { "ALTLEFT", "ALT" }, { "SPACEBAR", "SPACE" } };
+            for (String[] p : a) KEY_ALIASES.put(p[0], p[1]);
+        }
+
+        static int keyCode(String key) throws BenchError {
+            if (key.length() == 1 && key.charAt(0) != ' ') {
+                int c = java.awt.event.KeyEvent.getExtendedKeyCodeForChar(key.charAt(0));
+                if (c != java.awt.event.KeyEvent.VK_UNDEFINED) return c;
+            }
+            String k = key.trim().toUpperCase(java.util.Locale.ROOT).replace(' ', '_');
+            if (key.equals(" ")) k = "SPACE";
+            if (k.startsWith("VK_")) k = k.substring(3);
+            String alias = KEY_ALIASES.get(k.replace("_", ""));
+            if (alias != null) k = alias;
+            try {
+                return java.awt.event.KeyEvent.class.getField("VK_" + k).getInt(null);
+            } catch (Exception e) {
+                throw new BenchError("badKey", "key", key);
+            }
+        }
+
+        static char keyChar(String key, int code) {
+            if (key.length() == 1) {
+                char c = key.charAt(0);
+                // A letter key without Shift types the small letter, as on a real keyboard.
+                return Character.isLetter(c) ? Character.toLowerCase(c) : c;
+            }
+            switch (code) {
+                case java.awt.event.KeyEvent.VK_SPACE: return ' ';
+                case java.awt.event.KeyEvent.VK_ENTER: return '\n';
+                case java.awt.event.KeyEvent.VK_TAB: return '\t';
+                case java.awt.event.KeyEvent.VK_BACK_SPACE: return '\b';
+                case java.awt.event.KeyEvent.VK_ESCAPE: return (char) 27;
+                case java.awt.event.KeyEvent.VK_DELETE: return (char) 127;
+                default: return java.awt.event.KeyEvent.CHAR_UNDEFINED;
+            }
+        }
+
+        /**
+         * Who gets the keys: the component that has (or, in a window that is not active, would get)
+         * the keyboard focus, like on a real keyboard; with none, the window itself.
+         */
+        static java.awt.Component keyTarget(java.awt.Window w) {
+            java.awt.Component fo = w.getFocusOwner();
+            if (fo == null) fo = w.getMostRecentFocusOwner();
+            if (fo == null || !fo.isShowing()) fo = w;
+            return fo;
+        }
+
+        static void key(java.awt.Component target, int id, int code, char ch) {
+            java.awt.event.KeyEvent e = id == java.awt.event.KeyEvent.KEY_TYPED
+                ? new java.awt.event.KeyEvent(target, id, System.currentTimeMillis(), 0, java.awt.event.KeyEvent.VK_UNDEFINED, ch)
+                : new java.awt.event.KeyEvent(target, id, System.currentTimeMillis(), 0, code, ch);
+            if (target.isFocusable() && target.isEnabled()) {
+                // Not posted: dispatched straight to the target, so it counts even while another
+                // program (BlackJ) has the focus. Key bindings and KeyListeners both see it.
+                target.dispatchEvent(e);
+                return;
+            }
+            for (java.awt.event.KeyListener l : target.getKeyListeners()) {
+                if (id == java.awt.event.KeyEvent.KEY_PRESSED) l.keyPressed(e);
+                else if (id == java.awt.event.KeyEvent.KEY_RELEASED) l.keyReleased(e);
+                else l.keyTyped(e);
+            }
+        }
+
+        static void mouse(java.awt.Window w, int id, int x, int y, int button) {
+            java.awt.Point p = toWindow(w, x, y);
+            java.awt.Component deepest = javax.swing.SwingUtilities.getDeepestComponentAt(w, p.x, p.y);
+            // Through the nearest native component: AWT finds the Swing component under the point
+            // itself (and sends entered/exited) exactly as for a real click.
+            java.awt.Component hw = deepest == null ? w : deepest;
+            while (hw != w && hw.isLightweight() && hw.getParent() != null) hw = hw.getParent();
+            java.awt.Point q = javax.swing.SwingUtilities.convertPoint(w, p, hw);
+            int mask = button == 3 ? java.awt.event.InputEvent.BUTTON3_DOWN_MASK : button == 2 ? java.awt.event.InputEvent.BUTTON2_DOWN_MASK : java.awt.event.InputEvent.BUTTON1_DOWN_MASK;
+            int mods = id == java.awt.event.MouseEvent.MOUSE_PRESSED || id == java.awt.event.MouseEvent.MOUSE_DRAGGED ? mask : 0;
+            int b = id == java.awt.event.MouseEvent.MOUSE_MOVED ? java.awt.event.MouseEvent.NOBUTTON : button == 3 ? java.awt.event.MouseEvent.BUTTON3 : button == 2 ? java.awt.event.MouseEvent.BUTTON2 : java.awt.event.MouseEvent.BUTTON1;
+            int clicks = id == java.awt.event.MouseEvent.MOUSE_MOVED ? 0 : 1;
+            boolean popup = button == 3 && id == java.awt.event.MouseEvent.MOUSE_RELEASED;
+            hw.dispatchEvent(new java.awt.event.MouseEvent(hw, id, System.currentTimeMillis(), mods, q.x, q.y, clicks, popup, b));
+        }
+
+        static long ms(Object v, long fallback) {
+            if (!(v instanceof Number)) return fallback;
+            return Math.max(0, Math.min(10000, ((Number) v).longValue()));
+        }
+
+        static int coord(Map<String, Object> e, String k) throws BenchError {
+            if (!(e.get(k) instanceof Number)) throw new BenchError("badEvent", "type", str(e.get("type")));
+            return ((Number) e.get(k)).intValue();
+        }
+
+        @SuppressWarnings("unchecked")
+        static Map<String, Object> input(final java.awt.Window w, List<Object> events) throws Exception {
+            int delivered = 0;
+            long budget = 30000;
+            String target = null;
+            boolean fixedSize = false;
+            for (Object o : events) {
+                if (!(o instanceof Map)) continue;
+                final Map<String, Object> e = (Map<String, Object>) o;
+                String type = str(e.get("type"));
+                switch (type) {
+                    case "wait": {
+                        long d = Math.min(ms(e.get("ms"), 100), budget);
+                        budget -= d;
+                        Thread.sleep(d);
+                        break;
+                    }
+                    case "key": {
+                        final String key = str(e.get("key"));
+                        final int code = keyCode(key);
+                        final char ch = keyChar(key, code);
+                        String action = e.get("action") == null ? "press" : str(e.get("action"));
+                        final java.awt.Component[] t = new java.awt.Component[1];
+                        onEdt(() -> t[0] = keyTarget(w), 3000);
+                        target = t[0].getClass().getSimpleName();
+                        if (!action.equals("up")) {
+                            onEdt(() -> {
+                                key(t[0], java.awt.event.KeyEvent.KEY_PRESSED, code, ch);
+                                if (ch != java.awt.event.KeyEvent.CHAR_UNDEFINED) key(t[0], java.awt.event.KeyEvent.KEY_TYPED, code, ch);
+                            }, 3000);
+                            delivered++;
+                        }
+                        if (action.equals("press")) {
+                            long hold = Math.min(ms(e.get("holdMs"), 0), budget);
+                            budget -= hold;
+                            Thread.sleep(Math.max(15, hold));
+                        }
+                        if (!action.equals("down")) {
+                            onEdt(() -> key(t[0], java.awt.event.KeyEvent.KEY_RELEASED, code, ch), 3000);
+                            if (action.equals("up")) delivered++;
+                        }
+                        break;
+                    }
+                    case "type": {
+                        String text = str(e.get("text"));
+                        for (int i = 0; i < text.length(); i++) {
+                            final char c = text.charAt(i);
+                            final int code = c == '\n' ? java.awt.event.KeyEvent.VK_ENTER : java.awt.event.KeyEvent.getExtendedKeyCodeForChar(c);
+                            final java.awt.Component[] t = new java.awt.Component[1];
+                            onEdt(() -> {
+                                t[0] = keyTarget(w);
+                                key(t[0], java.awt.event.KeyEvent.KEY_PRESSED, code, c);
+                                key(t[0], java.awt.event.KeyEvent.KEY_TYPED, code, c);
+                                key(t[0], java.awt.event.KeyEvent.KEY_RELEASED, code, c);
+                            }, 3000);
+                            target = t[0].getClass().getSimpleName();
+                            delivered++;
+                            Thread.sleep(8);
+                        }
+                        break;
+                    }
+                    case "click": {
+                        final int x = coord(e, "x");
+                        final int y = coord(e, "y");
+                        final int button = e.get("button") instanceof Number ? ((Number) e.get("button")).intValue() : 1;
+                        onEdt(() -> {
+                            mouse(w, java.awt.event.MouseEvent.MOUSE_MOVED, x, y, 0);
+                            mouse(w, java.awt.event.MouseEvent.MOUSE_PRESSED, x, y, button);
+                        }, 3000);
+                        Thread.sleep(30);
+                        onEdt(() -> {
+                            mouse(w, java.awt.event.MouseEvent.MOUSE_RELEASED, x, y, button);
+                            mouse(w, java.awt.event.MouseEvent.MOUSE_CLICKED, x, y, button);
+                        }, 3000);
+                        delivered++;
+                        break;
+                    }
+                    case "move": {
+                        final int x = coord(e, "x");
+                        final int y = coord(e, "y");
+                        onEdt(() -> mouse(w, java.awt.event.MouseEvent.MOUSE_MOVED, x, y, 0), 3000);
+                        delivered++;
+                        break;
+                    }
+                    case "resize": {
+                        // The content area gets this size (the frame grows by its borders), like
+                        // dragging the window's edge; a window that cannot be resized says so.
+                        final int cw = Math.max(16, Math.min(4000, coord(e, "width")));
+                        final int ch = Math.max(16, Math.min(4000, coord(e, "height")));
+                        onEdt(() -> {
+                            java.awt.Dimension now = contentSize(w);
+                            w.setSize(Math.max(1, w.getWidth() + cw - now.width), Math.max(1, w.getHeight() + ch - now.height));
+                            w.validate();
+                        }, 3000);
+                        if ((w instanceof java.awt.Frame && !((java.awt.Frame) w).isResizable()) || (w instanceof java.awt.Dialog && !((java.awt.Dialog) w).isResizable())) fixedSize = true;
+                        delivered++;
+                        break;
+                    }
+                    default:
+                        throw new BenchError("badEvent", "type", type);
+                }
+            }
+            // Let the program react before anyone looks (a repaint, a println).
+            settle(300);
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("delivered", delivered);
+            if (target != null) r.put("keyTarget", target);
+            if (fixedSize) r.put("notResizable", true);
+            return r;
         }
     }
 
@@ -250,6 +862,21 @@ public class BlackJBench {
                 case "list":
                     reply(id, listBench());
                     break;
+                case "offscreen":
+                    offscreen = Boolean.TRUE.equals(req.get("on"));
+                    if (offscreen) {
+                        try {
+                            Win.hook();
+                        } catch (Throwable noDesktop) { /* a JDK without java.desktop: no windows anyway */ }
+                    }
+                    reply(id, new LinkedHashMap<>());
+                    break;
+                case "windows":
+                case "capture":
+                case "input":
+                case "closeWindows":
+                    windowCommand(id, cmd, req);
+                    break;
                 default:
                     throw new BenchError("unknownCommand", "cmd", cmd);
             }
@@ -258,13 +885,39 @@ public class BlackJBench {
         }
     }
 
+    /** Window commands run beside the protocol: they wait for the program's event thread, which may be busy. */
+    static void windowCommand(final Object id, final String cmd, final Map<String, Object> req) throws BenchError {
+        if (!awtRunning()) {
+            if (cmd.equals("capture") || cmd.equals("input")) throw new BenchError("noWindow");
+            Map<String, Object> r = new LinkedHashMap<>();
+            if (cmd.equals("windows")) r.put("windows", new ArrayList<>());
+            else r.put("closed", 0);
+            reply(id, r);
+            return;
+        }
+        helper.submit(() -> {
+            try {
+                reply(id, Win.run(cmd, req));
+            } catch (Throwable t) {
+                replyError(id, t);
+            }
+            if (cmd.equals("closeWindows")) {
+                try { reportLive(); } catch (Throwable ignored) { /* the watcher sends it */ }
+            }
+        });
+    }
+
     static void runUser(final Object id, final String cmd, final Map<String, Object> req) throws BenchError {
-        if (busy) throw new BenchError("busy");
-        busy = true;
-        Map<String, Object> started = new LinkedHashMap<>();
-        started.put("event", "running");
-        started.put("running", true);
-        send(started);
+        synchronized (RUN_LOCK) {
+            if (busy) throw new BenchError("busy");
+            busy = true;
+            Map<String, Object> started = new LinkedHashMap<>();
+            started.put("event", "running");
+            started.put("running", true);
+            // A window can open (and be reported) while the call still runs: say whose call it is.
+            started.put("cmd", cmd);
+            send(started);
+        }
         worker.submit(() -> {
             Thread.currentThread().setContextClassLoader(loader);
             Object result = null;
@@ -276,17 +929,66 @@ public class BlackJBench {
                 else result = doMain(req);
             } catch (Throwable t) {
                 failure = t;
-            } finally {
-                busy = false;
+            }
+            // A window the program built with invokeLater exists only once the event thread got
+            // to it: wait a moment, so the end of the call already says whether windows are open.
+            // In a fresh JVM the first Swing window can take longer (classes and fonts load, more
+            // so with the debugger attached): while none shows yet and the event thread is still
+            // busy, wait up to 3 s in all. settle() returns at once when the event thread is idle.
+            // Still busy after that (paused by the debugger, say): "pending" tells BlackJ that a
+            // window may yet come, and the watcher reports it when it does.
+            boolean pending = false;
+            try {
+                if (awtRunning()) {
+                    boolean settled = Win.settle(500);
+                    if (Win.open().isEmpty()) settled = Win.settle(2500);
+                    pending = !settled && Win.open().isEmpty();
+                }
+            } catch (Throwable ignored) { /* no java.desktop */ }
+            try {
                 userOut.flush();
                 userErr.flush();
+                drainOut();
+            } catch (Throwable ignored) { /* the program closed System.out */ }
+            // The end of the call goes out before its answer: when BlackJ has the answer, the
+            // bench is already free again (and nobody can start a call in between).
+            synchronized (RUN_LOCK) {
+                Map<String, Object> live;
+                try {
+                    live = liveState();
+                } catch (Throwable t) {
+                    live = new LinkedHashMap<>();
+                }
+                busy = false;
+                Map<String, Object> idle = new LinkedHashMap<>();
+                idle.put("event", "running");
+                idle.put("running", false);
+                // What ended: windows that a "new" or "call" opened belong to the bench objects, not to a main program.
+                idle.put("cmd", cmd);
+                idle.putAll(live);
+                if (pending) idle.put("pending", true);
+                liveKey = Json.write(live);
+                send(idle);
             }
-            if (failure != null) replyError(id, failure);
-            else reply(id, result);
-            Map<String, Object> idle = new LinkedHashMap<>();
-            idle.put("event", "running");
-            idle.put("running", false);
-            send(idle);
+            try {
+                if (failure != null) replyError(id, failure);
+                else reply(id, result);
+            } catch (Throwable broken) {
+                // The result or the exception could not be described (a toString or getMessage
+                // that throws): answer anyway, the caller must never wait for ever.
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", id);
+                m.put("ok", false);
+                Map<String, Object> e = new LinkedHashMap<>();
+                e.put("kind", "exception");
+                Throwable shown = failure != null ? failure : broken;
+                e.put("type", shown.getClass().getName());
+                e.put("simpleType", shown.getClass().getSimpleName());
+                e.put("message", null);
+                e.put("frames", new ArrayList<>());
+                m.put("error", e);
+                send(m);
+            }
         });
     }
 
@@ -1299,11 +2001,14 @@ public class BlackJBench {
     // ------------------------------------------------------------------ protocol
 
     static void send(Map<String, Object> msg) {
-        String s = Json.write(msg);
+        // One write per message: nothing else written to stdout can land inside it.
+        byte[] line = (MARK + Json.write(msg) + "\n").getBytes(StandardCharsets.UTF_8);
         synchronized (PROTO_LOCK) {
-            proto.print(s);
-            proto.print('\n');
-            proto.flush();
+            try {
+                proto.write(line);
+            } catch (java.io.IOException gone) {
+                // BlackJ closed the pipe; the reader loop ends the JVM.
+            }
         }
     }
 
@@ -1378,33 +2083,70 @@ public class BlackJBench {
         }
     }
 
-    /** Collects what the student's code prints and sends it as "out" events. */
+    /**
+     * What the program printed, System.out and System.err in the order it happened. Sent as "out"
+     * events every 40 ms (or when much piled up), not one message per println: a loop that
+     * prints 100 000 lines stays fast. The locks are fields of BlackJBench itself, so the debugger
+     * knows not to stop a thread while it holds one.
+     */
+    static final Object OUT_LOCK = new Object();
+    static final Object DRAIN_LOCK = new Object();
+    static final List<Object[]> outParts = new ArrayList<>();
+    static int outSize = 0;
+
+    static void outAdd(String stream, byte[] b, int off, int len) {
+        boolean full;
+        synchronized (OUT_LOCK) {
+            Object[] last = outParts.isEmpty() ? null : outParts.get(outParts.size() - 1);
+            ByteArrayOutputStream buf;
+            if (last != null && last[0].equals(stream)) {
+                buf = (ByteArrayOutputStream) last[1];
+            } else {
+                buf = new ByteArrayOutputStream();
+                outParts.add(new Object[] { stream, buf });
+            }
+            buf.write(b, off, len);
+            outSize += len;
+            full = outSize > 65536;
+        }
+        if (full) drainOut();
+    }
+
+    /** Sends everything printed so far. */
+    static void drainOut() {
+        synchronized (DRAIN_LOCK) {
+            List<Object[]> parts;
+            synchronized (OUT_LOCK) {
+                if (outParts.isEmpty()) return;
+                parts = new ArrayList<>(outParts);
+                outParts.clear();
+                outSize = 0;
+            }
+            for (Object[] p : parts) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("event", "out");
+                m.put("stream", p[0]);
+                m.put("text", new String(((ByteArrayOutputStream) p[1]).toByteArray(), StandardCharsets.UTF_8));
+                send(m);
+            }
+        }
+    }
+
+    /** System.out or System.err of the student's code. */
     static class EventStream extends OutputStream {
         final String stream;
-        final ByteArrayOutputStream buf = new ByteArrayOutputStream();
 
         EventStream(String stream) { this.stream = stream; }
 
-        @Override public synchronized void write(int b) {
-            buf.write(b);
-            if (buf.size() > 8192) flush();
+        @Override public void write(int b) {
+            outAdd(stream, new byte[] { (byte) b }, 0, 1);
         }
 
-        @Override public synchronized void write(byte[] b, int off, int len) {
-            buf.write(b, off, len);
-            if (buf.size() > 8192) flush();
+        @Override public void write(byte[] b, int off, int len) {
+            if (len > 0) outAdd(stream, b, off, len);
         }
 
-        @Override public synchronized void flush() {
-            if (buf.size() == 0) return;
-            String text = new String(buf.toByteArray(), StandardCharsets.UTF_8);
-            buf.reset();
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("event", "out");
-            m.put("stream", stream);
-            m.put("text", text);
-            send(m);
-        }
+        // flush() is the PrintStream's autoflush after every println: the flusher thread sends.
     }
 
     /** System.in for the student's code, fed line by line from the console. */
@@ -1427,7 +2169,9 @@ public class BlackJBench {
             while (pos >= data.length) {
                 if (!announced) {
                     announced = true;
+                    // The prompt the program printed reaches the console before the input field asks.
                     userOut.flush();
+                    drainOut();
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("event", "waitingForInput");
                     send(m);

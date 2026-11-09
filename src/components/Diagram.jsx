@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore, setState, getState } from '../store.js';
 import { useT, formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
-import { childPackages, simpleName, flowLayout, layoutScore, routeEdge, spreadPorts } from '../model.js';
+import { childPackages, simpleName, flowLayout, layoutScore, routeDiagram, diagramEdges, arrowHead } from '../model.js';
 import { signature } from '../lib/javaParse.js';
 import Icon from './Icon.jsx';
+import '../styles/diagram.css';
 
 const VIS = { public: '+', private: '−', protected: '#', package: '~' };
 const MAX_MEMBERS = 7;
@@ -19,19 +20,20 @@ const FULL_K = 0.85;
 const ROW_GAP = 44;
 const TIGHT_GAP = 32;
 
-function clip(a, p) {
-  const cx = a.x + a.w / 2;
-  const cy = a.y + a.h / 2;
-  const dx = p.x - cx;
-  const dy = p.y - cy;
-  if (!dx && !dy) return { x: cx, y: cy };
-  const s = Math.min(dx ? a.w / 2 / Math.abs(dx) : Infinity, dy ? a.h / 2 / Math.abs(dy) : Infinity);
-  return { x: cx + dx * s, y: cy + dy * s };
-}
+// Zoom limits for the wheel and the buttons.
+const K_MIN = 0.25;
+const K_MAX = 2;
+const clampK = (k) => Math.min(K_MAX, Math.max(K_MIN, k));
+const reducedMotion = () => !!document.documentElement.dataset.smoke || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** The view that shows the same diagram point under (mx, my) at zoom k. */
+const zoomAround = (v, mx, my, k) => ({ k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k });
+
+const num = (v) => Math.round(v * 100) / 100;
+const ptsAttr = (pts) => pts.map((p) => num(p.x) + ',' + num(p.y)).join(' ');
 
 /** A path through points with its corners rounded. */
 function roundedPath(pts, r = 6) {
-  let d = `M${pts[0].x} ${pts[0].y}`;
+  let d = `M${num(pts[0].x)} ${num(pts[0].y)}`;
   for (let i = 1; i < pts.length - 1; i++) {
     const p = pts[i - 1];
     const c = pts[i];
@@ -43,77 +45,55 @@ function roundedPath(pts, r = 6) {
     };
     const a = u(p);
     const b = u(n);
-    d += ` L${a.x} ${a.y} Q${c.x} ${c.y} ${b.x} ${b.y}`;
+    d += ` L${num(a.x)} ${num(a.y)} Q${num(c.x)} ${num(c.y)} ${num(b.x)} ${num(b.y)}`;
   }
   const last = pts[pts.length - 1];
-  return d + ` L${last.x} ${last.y}`;
+  return d + ` L${num(last.x)} ${num(last.y)}`;
 }
 
-/** An edge drawn as a line: "uses" (dashed, open head, routed around cards in the way), or
-    inheritance between cards that sit side by side. */
-function Edge({ from, to, kind, hl, points }) {
-  const cls = (kind === 'uses' ? 'uses' : kind === 'impl' ? 'impl' : '') + (hl ? ' hl' : '');
-  const head = (b, ang, len = 11, spread = 0.5) => {
-    const p1 = { x: b.x - len * Math.cos(ang - spread), y: b.y - len * Math.sin(ang - spread) };
-    const p2 = { x: b.x - len * Math.cos(ang + spread), y: b.y - len * Math.sin(ang + spread) };
-    return { p1, p2, base: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 } };
-  };
-  if (points && points.length >= 2) {
-    const b = points[points.length - 1];
-    const p = points[points.length - 2];
-    const h = head(b, Math.atan2(b.y - p.y, b.x - p.x), 9, 0.45);
-    return (
-      <g>
-        <path className={cls} d={roundedPath(points)} />
-        <path className={'open' + (hl ? ' hl' : '')} d={`M${h.p1.x} ${h.p1.y} L${b.x} ${b.y} L${h.p2.x} ${h.p2.y}`} />
-      </g>
-    );
-  }
-  const c1 = { x: from.x + from.w / 2, y: from.y + from.h / 2 };
-  const c2 = { x: to.x + to.w / 2, y: to.y + to.h / 2 };
-  const a = clip(from, c2);
-  const b = clip(to, c1);
-  const ang = Math.atan2(b.y - a.y, b.x - a.x);
-  const h = head(b, ang, kind === 'uses' ? 9 : 11, kind === 'uses' ? 0.45 : 0.5);
-  return (
-    <g>
-      <path className={cls} d={`M${a.x} ${a.y} L${kind === 'uses' ? b.x : h.base.x} ${kind === 'uses' ? b.y : h.base.y}`} />
-      {kind === 'uses' ? (
-        <path className={'open' + (hl ? ' hl' : '')} d={`M${h.p1.x} ${h.p1.y} L${b.x} ${b.y} L${h.p2.x} ${h.p2.y}`} />
-      ) : (
-        <path className={'head' + (hl ? ' hl' : '')} d={`M${b.x} ${b.y} L${h.p1.x} ${h.p1.y} L${h.p2.x} ${h.p2.y} Z`} />
-      )}
-    </g>
-  );
-}
+const lineClass = (kind) => 'line' + (kind === 'uses' ? ' uses' : kind === 'impl' ? ' impl' : '');
 
-/** Inheritance as a tree: every child below its parent rises to one shared bus just above the
-    highest child, one trunk runs up from there, and a single hollow triangle sits on the parent's
-    bottom edge. */
-function InheritTree({ parent, kids, kind, hl }) {
-  const cls = kind === 'impl' ? 'impl' : '';
-  const px = Math.round(parent.x + parent.w / 2);
-  const tip = parent.y + parent.h;
-  const base = tip + 10;
-  const top = Math.min(...kids.map((k) => k.rect.y));
-  const bus = Math.round(Math.max(base + 10, top - Math.min(24, (top - base) / 2)));
-  const anyHl = hl || kids.some((k) => k.hl);
-  const branch = ({ rect }) => {
-    const cx = Math.round(rect.x + rect.w / 2);
-    const dx = px - cx;
-    if (Math.abs(dx) < 1) return `M${cx} ${rect.y} V${bus}`;
-    const r = Math.min(6, Math.abs(dx) / 2, (rect.y - bus) / 2);
-    const sx = Math.sign(dx);
-    return `M${cx} ${rect.y} V${bus + r} Q${cx} ${bus} ${cx + sx * r} ${bus} H${px}`;
-  };
+/**
+ * The relations as UML draws them (model.js routeDiagram does the geometry): "extends" a solid line,
+ * "implements" a dashed one, both ending in a hollow triangle on the supertype; "uses" a lighter
+ * dashed line with an open head on the class that is used. Every group carries what it stands for
+ * (data-from, data-to, data-kind) and every head its tip, so the smoke test can measure them.
+ * While a card is pointed at, its own relations are drawn strong and the others step back; for a
+ * subclass that is the way up through its tree.
+ */
+const Relations = memo(function Relations({ routes, active }) {
+  const mark = (on) => (!active ? '' : on ? ' hl' : ' dim');
   return (
-    <g>
-      {kids.map((k) => (
-        <path key={k.key} className={cls + (hl || k.hl ? ' hl' : '')} d={branch(k)} />
+    <>
+      {routes.trees.map((t) => {
+        const kid = active && active !== t.to && t.kids.includes(active) ? active : null;
+        return (
+          <g key={t.id} className={'rel tree ' + t.kind + (kid ? ' part' : mark(active === t.to))} data-kind={t.kind} data-to={t.to} data-from={t.kids.join(' ')}>
+            {t.paths.map((p, i) => <path key={i} className={lineClass(t.kind)} d={roundedPath(p)} data-pts={ptsAttr(p)} />)}
+            {kid && <path className={lineClass(t.kind) + ' trace'} d={roundedPath(t.routes[kid])} />}
+            <path className={'head tri' + (kid ? ' lit' : '')} d={t.head.d} data-tip={num(t.head.tip.x) + ' ' + num(t.head.tip.y)} />
+          </g>
+        );
+      })}
+      {routes.lines.map((l) => (
+        <g key={l.from + '>' + l.to + '>' + l.kind} className={'rel ' + l.kind + mark(active === l.from || active === l.to)} data-kind={l.kind} data-from={l.from} data-to={l.to}>
+          <path className={lineClass(l.kind)} d={roundedPath(l.line)} data-pts={ptsAttr(l.pts)} />
+          <path className={'head ' + l.head.type} d={l.head.d} data-tip={num(l.head.tip.x) + ' ' + num(l.head.tip.y)} />
+        </g>
       ))}
-      <path className={cls + (anyHl ? ' hl' : '')} d={`M${px} ${bus} V${base}`} />
-      <path className={'head' + (anyHl ? ' hl' : '')} d={`M${px} ${tip} L${px - 6} ${base} L${px + 6} ${base} Z`} />
-    </g>
+    </>
+  );
+});
+
+/** The legend's sample of one kind of relation: drawn by the same code and at the same size as the
+    arrows in the diagram at 100%. */
+function Glyph({ kind }) {
+  const h = arrowHead([{ x: 1, y: 8 }, { x: 31, y: 8 }], kind === 'uses' ? 'open' : 'tri');
+  return (
+    <svg className={'rel glyph ' + kind} width="32" height="16" viewBox="0 0 32 16" aria-hidden="true">
+      <path className={lineClass(kind)} d={roundedPath(h.line)} />
+      <path className={'head ' + h.type} d={h.d} />
+    </svg>
   );
 }
 
@@ -182,7 +162,7 @@ async function classMenu(cls, x, y, t) {
         items.push({ label: t('menu.runMainArgs'), tour: 'runMainArgs', icon: 'play', onClick: () => A.openDialogBox({ type: 'call', kind: 'main', cls, method: { key: 'main', name: 'main', static: true, returnType: 'void', params: [{ name: 'args', type: 'String[]', category: 'array' }] } }) });
       }
       if (info && info.isTest) {
-        items.push({ label: t('menu.runTests'), tour: 'runTests', icon: 'check', onClick: () => A.runTests({ className: cls }) });
+        items.push({ label: t('menu.runTests'), tour: 'runTests', icon: 'flask', onClick: () => A.runTests({ className: cls }) });
         items.push({ label: t('menu.record'), tour: 'record', icon: 'record', onClick: () => A.openDialogBox({ type: 'record', cls }) });
       }
       if (info && info.isTest && !s.project.readOnly) {
@@ -197,7 +177,7 @@ async function classMenu(cls, x, y, t) {
   }
   items.push({ type: 'sep' });
   items.push({ label: t('menu.open'), tour: 'open', icon: 'file', onClick: () => A.openClass(cls) });
-  if (info && !info.isTest && info.kind !== 'interface' && !s.project.readOnly) items.push({ label: t('menu.createTest'), tour: 'createTest', icon: 'check', onClick: () => A.newClass(simple + 'Test', 'test') });
+  if (info && !info.isTest && info.kind !== 'interface' && !s.project.readOnly) items.push({ label: t('menu.createTest'), tour: 'createTest', icon: 'flask', onClick: () => A.newClass(simple + 'Test', 'test') });
   if (!s.settings.aiOff) items.push({ label: t('menu.explain'), tour: 'explain', icon: 'tutor', onClick: () => { A.openClass(cls); setTimeout(() => A.askTutor(t('tutor.prompt.explainClass', { name: simple })), 50); } });
   if (!s.project.readOnly) {
     items.push({ type: 'sep' });
@@ -239,12 +219,96 @@ export default function Diagram({ model }) {
   const arrangedAt = useStore((s) => s.arrangedAt);
   const hostRef = useRef(null);
   const cardRefs = useRef({});
+  const noteRef = useRef(null);
   const [sizes, setSizes] = useState({});
+  const [noteSize, setNoteSize] = useState(null);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
+  // The view as of the last change, ahead of React's render: pointer and wheel events that arrive
+  // between two renders build on it, so no movement is lost.
+  const live = useRef(view);
+  const put = (v) => {
+    live.current = v;
+    setView(v);
+  };
+  // Zooming glides (180 ms, ease-out) unless the user asked for less motion; the wheel keeps
+  // retargeting the glide, so a burst of wheel steps or a pinch reads as one smooth zoom.
+  const anim = useRef({ raf: 0, to: null });
+  const stopGlide = () => {
+    cancelAnimationFrame(anim.current.raf);
+    anim.current.to = null;
+  };
+  const glide = (to) => {
+    stopGlide();
+    if (reducedMotion()) {
+      put(to);
+      return;
+    }
+    const from = live.current;
+    const t0 = performance.now();
+    anim.current.to = to;
+    const tick = (now) => {
+      const p = Math.min(1, (now - t0) / 180);
+      const e = 1 - (1 - p) ** 3;
+      put(p >= 1 ? to : { k: from.k + (to.k - from.k) * e, x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e });
+      if (p < 1) anim.current.raf = requestAnimationFrame(tick);
+      else anim.current.to = null;
+    };
+    anim.current.raf = requestAnimationFrame(tick);
+  };
+  useEffect(() => () => cancelAnimationFrame(anim.current.raf), []);
   // The grid moves with the canvas; below 50% zoom it steps up so it never turns into a mesh.
   const gridStep = 24 * view.k * (view.k < 0.5 ? 4 : 1);
   const [panning, setPanning] = useState(false);
   const [dragging, setDragging] = useState(null);
+  // The card under the pointer (its relations are drawn strong), the cards picked together (Shift-
+  // drag a rectangle, Ctrl-click), the rectangle while it is drawn, and Space held for panning.
+  const [hover, setHover] = useState(null);
+  const [multi, setMulti] = useState([]);
+  const [band, setBand] = useState(null);
+  const [space, setSpace] = useState(false);
+  const spaceRef = useRef(false);
+  const overRef = useRef(false);
+  useEffect(() => {
+    setMulti([]);
+    setHover(null);
+  }, [projectDir, pkg]);
+  useEffect(() => {
+    // Space types or presses a button anywhere else; over the diagram (and with the focus on it or
+    // on one of its own buttons) it pans.
+    const typing = (el) => {
+      if (!el || el.nodeType !== 1) return false;
+      if (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.closest('.monaco-editor')) return true;
+      const own = hostRef.current && hostRef.current.closest('.panel');
+      return el.tagName === 'BUTTON' && !(own && own.contains(el));
+    };
+    const down = (e) => {
+      if (e.code !== 'Space' || e.ctrlKey || e.altKey || e.metaKey) return;
+      if (!spaceRef.current && (!overRef.current || typing(document.activeElement) || typing(e.target))) return;
+      e.preventDefault();
+      if (!spaceRef.current) {
+        spaceRef.current = true;
+        setSpace(true);
+      }
+    };
+    const up = (e) => {
+      if (e.code !== 'Space' || !spaceRef.current) return;
+      e.preventDefault();
+      spaceRef.current = false;
+      setSpace(false);
+    };
+    const reset = () => {
+      spaceRef.current = false;
+      setSpace(false);
+    };
+    window.addEventListener('keydown', down, true);
+    window.addEventListener('keyup', up, true);
+    window.addEventListener('blur', reset);
+    return () => {
+      window.removeEventListener('keydown', down, true);
+      window.removeEventListener('keyup', up, true);
+      window.removeEventListener('blur', reset);
+    };
+  }, []);
   // The width (in diagram units) the flow layout packs into and its row gap, set by fit().
   const [flowAt, setFlowAt] = useState(null);
   const [compact, setCompact] = useState(false);
@@ -276,6 +340,10 @@ export default function Diagram({ model }) {
       if (!sizes[k] || sizes[k].w !== next[k].w || sizes[k].h !== next[k].h) changed = true;
     }
     if (changed || Object.keys(next).length !== Object.keys(sizes).length) setSizes(next);
+    // The README note or the "parent package" card: the lines keep clear of it as well.
+    const n = noteRef.current;
+    const ns = n ? { w: n.offsetWidth, h: n.offsetHeight } : null;
+    if ((ns && ns.w) !== (noteSize && noteSize.w) || (ns && ns.h) !== (noteSize && noteSize.h)) setNoteSize(ns);
   });
 
   // Until the user drags a card in this package, the cards follow the diagram's own flow layout,
@@ -305,12 +373,37 @@ export default function Diagram({ model }) {
     const host = hostRef.current;
     return { cw: Math.max(120, host.clientWidth - 48), ch: Math.max(120, host.clientHeight - 24 - 56) };
   };
-  // Content taller than the panel ends above the zoom tools, so the lowest row (often the class
-  // with main) stays in full view and the rows above it scroll.
+  /**
+   * The box of a layout with its relation lines: a detour that runs around the outside of all
+   * cards is part of the picture too (8 for the arrowheads), or its arrow would come in from the
+   * panel's edge with no visible source.
+   */
+  const withLines = (b, at, size) => {
+    const es = diagramEdges(model, new Set(classes.map((c) => c.fileClass)), showUses);
+    if (!es.length) return b;
+    const rs = {};
+    for (const k of keys) rs[k] = { ...at[k], ...size(k) };
+    const pts = [];
+    try {
+      const r = routeDiagram(rs, es);
+      for (const tr of r.trees) for (const p of Object.values(tr.routes || {})) pts.push(...p);
+      for (const l of r.lines) pts.push(...(l.pts || []));
+    } catch {
+      return b;
+    }
+    if (!pts.length) return b;
+    const minX = Math.min(b.minX, ...pts.map((p) => p.x - 8));
+    const minY = Math.min(b.minY, ...pts.map((p) => p.y - 8));
+    const maxX = Math.max(b.minX + b.w, ...pts.map((p) => p.x + 8));
+    const maxY = Math.max(b.minY + b.h, ...pts.map((p) => p.y + 8));
+    return { minX, minY, w: maxX - minX, h: maxY - minY };
+  };
+  // Content taller than the panel starts at the top: the roots of the inheritance trees stay in
+  // full view and the rows below scroll (cutting the top row through its cards looked broken).
   const viewFor = (b, k) => {
-    const { cw, ch } = panelBox();
+    const { cw } = panelBox();
     const x = b.w * k > cw ? 24 - b.minX * k : 24 + (cw - b.w * k) / 2 - b.minX * k;
-    const y = b.h * k > ch ? 24 + ch - (b.minY + b.h) * k : 24 - b.minY * k;
+    const y = 24 - b.minY * k;
     return { k, x: Math.round(x), y: Math.round(y) };
   };
   // Fits the content into the panel with 24px around it and a 56px band at the bottom for the
@@ -319,18 +412,22 @@ export default function Diagram({ model }) {
   // lists (compact) for as long as the full cards would not fit at 85%, and compact cards are
   // never fitted below 90%: their rows move closer together first, then the canvas pans.
   const moved = useRef(false);
-  const fit = (override) => {
+  // "Show all" (the button, Ctrl+0) really shows everything, smaller if need be; the automatic fit
+  // keeps cards readable and pans instead. The choice holds until another project or package.
+  const fitAll = useRef(false);
+  const fit = (opts = {}) => {
     const host = hostRef.current;
     if (!host || !keys.length) return;
     moved.current = false;
+    if (opts.all) fitAll.current = true;
     const { cw, ch } = panelBox();
     const scale = (b) => Math.min(1, cw / b.w, ch / b.h);
     const plan = (sz, c) => {
       const size = sizeOf(sz);
       if (manual) {
-        const at = Object.fromEntries(keys.map((k) => [k, (override && override[k]) || positions[k] || { x: 32, y: 32 }]));
+        const at = Object.fromEntries(keys.map((k) => [k, positions[k] || { x: 32, y: 32 }]));
         const b = bbox(at, size);
-        return { w: null, b, k: scale(b) };
+        return { w: null, b, k: scale(b), at };
       }
       const short = c || !details;
       const floor = short ? MIN_K : FULL_K;
@@ -338,7 +435,7 @@ export default function Diagram({ model }) {
         const w = Math.floor(cw / t);
         const at = flowLayout(model, keys, size, w, 40, gap);
         const b = bbox(at, size);
-        return { w, gap, b, k: scale(b), crossed: crossings(at, size) };
+        return { w, gap, b, k: scale(b), crossed: crossings(at, size), at };
       });
       let cands = pack(gapY(short));
       if (short && !cands.some((x) => x.k >= floor)) cands = cands.concat(pack(TIGHT_GAP));
@@ -367,8 +464,16 @@ export default function Diagram({ model }) {
     }
     const p = plan(sizes, compact);
     if (!manual) setFlowAt({ w: p.w, gap: p.gap });
+    // The lines count too: a detour around all cards stays in view.
+    const lb = withLines(p.b, p.at, sizeOf(sizes));
+    const k = Math.min(p.k, scale(lb));
     // Full cards are never fitted below FULL_K (they turn compact first); compact ones stop at MIN_K.
-    setView(viewFor(p.b, Math.max(compact || !details ? MIN_K : 0.3, p.k)));
+    const target = viewFor(lb, fitAll.current ? Math.max(0.3, k) : Math.max(compact || !details ? MIN_K : 0.3, k));
+    if (opts.animate) glide(target);
+    else {
+      stopGlide();
+      put(target);
+    }
   };
   const fitRef = useRef(fit);
   fitRef.current = fit;
@@ -401,13 +506,19 @@ export default function Diagram({ model }) {
   const captureDiagram = async (use) => {
     const host = hostRef.current;
     if (!host || !keys.length) return;
-    const before = view;
+    stopGlide();
+    const before = live.current;
     const wasMoved = moved.current;
+    const wasMulti = multi;
     setState({ selectedClass: null, highlightClass: null });
+    setHover(null);
+    setMulti([]);
     const at = Object.fromEntries(keys.map((k) => [k, pos(k)]));
-    const content = bbox(at, sizeOf(sizes));
+    // Cards and every routed line, with 16 more around: no line hugs the image's edge.
+    const lb = withLines(bbox(at, sizeOf(sizes)), at, sizeOf(sizes));
+    const content = { minX: lb.minX - 16, minY: lb.minY - 16, w: lb.w + 32, h: lb.h + 32 };
     const { cw, ch } = panelBox();
-    setView(viewFor(content, Math.max(0.3, Math.min(1, cw / content.w, ch / content.h))));
+    put(viewFor(content, Math.max(0.3, Math.min(1, cw / content.w, ch / content.h))));
     host.classList.add('exporting');
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     await new Promise((r) => setTimeout(r, 80));
@@ -426,7 +537,8 @@ export default function Diagram({ model }) {
       await use({ x: box.left, y: box.top, width: box.right - box.left, height: box.bottom - box.top });
     } finally {
       host.classList.remove('exporting');
-      setView(before);
+      put(before);
+      setMulti(wasMulti);
       moved.current = wasMoved;
     }
   };
@@ -464,6 +576,7 @@ export default function Diagram({ model }) {
       fitted.current = id;
       fittedSig.current = sig;
       seenKeys.current = keys;
+      fitAll.current = false;
       fit();
       return;
     }
@@ -505,22 +618,19 @@ export default function Diagram({ model }) {
   const rects = {};
   for (const k of keys) rects[k] = { ...pos(k), w: sizes[k]?.w || 200, h: sizes[k]?.h || 80 };
   const visible = new Set(classes.map((c) => c.fileClass));
-  const edges = model.edges.filter((e) => visible.has(e.from) && visible.has(e.to) && (showUses || e.kind !== 'uses'));
-  // Children that sit clearly below their parent join that parent's tree; the rest stay straight lines.
-  const trees = new Map();
-  const straight = [];
-  for (const e of edges) {
-    const a = rects[e.from];
-    const b = rects[e.to];
-    if (e.kind !== 'uses' && a.y > b.y + b.h + 24) {
-      const id = e.to + '|' + e.kind;
-      if (!trees.has(id)) trees.set(id, { parent: e.to, kind: e.kind, kids: [] });
-      trees.get(id).kids.push({ key: e.from, rect: a, hl: highlight === e.from });
-    } else straight.push(e);
-  }
-  // "Uses" arrows are routed around the cards in the way, each with its own port on a card's side.
-  const routes = new Map(straight.filter((e) => e.kind === 'uses').map((e) => [e, { from: e.from, to: e.to, pts: routeEdge(rects[e.from], rects[e.to], keys.filter((k) => k !== e.from && k !== e.to).map((k) => rects[k])) }]));
-  spreadPorts([...routes.values()], rects);
+  const edges = diagramEdges(model, visible, showUses);
+  // Routed again only when a card moves or changes size or a relation changes; panning, zooming
+  // and hovering reuse the routes.
+  const noteRect = hasNote && noteSize && keys.length ? { x: noteAt.x, y: noteAt.y, w: noteSize.w, h: noteSize.h } : null;
+  const geo = JSON.stringify([keys.map((k) => [k, rects[k].x, rects[k].y, rects[k].w, rects[k].h]), edges.map((e) => e.from + '>' + e.to + '>' + e.kind), noteRect]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const routes = useMemo(() => routeDiagram(rects, edges, noteRect ? [noteRect] : []), [geo]);
+  const rectsRef = useRef(rects);
+  rectsRef.current = rects;
+  // Hovering a card, or an object of it on the bench, shows its relations.
+  const active = [hover, highlight].find((k) => k && visible.has(k)) || null;
+  const related = new Set();
+  if (active) for (const e of edges) if (e.from === active || e.to === active) related.add(e.from === active ? e.to : e.from);
 
   /** Arrow keys move the selection to the nearest class card in that direction. */
   const moveSelection = (from, key) => {
@@ -566,30 +676,55 @@ export default function Diagram({ model }) {
     else if (left + w > host.clientWidth - m) dx = Math.max(m - left, host.clientWidth - m - (left + w));
     if (top < m) dy = m - top;
     else if (top + h > host.clientHeight - 56) dy = Math.max(m - top, host.clientHeight - 56 - (top + h));
-    if (dx || dy) setView((v) => ({ ...v, x: Math.round(v.x + dx), y: Math.round(v.y + dy) }));
+    if (dx || dy) glide({ ...live.current, x: Math.round(live.current.x + dx), y: Math.round(live.current.y + dy) });
   }, [revealCard && revealCard.at, !!(revealCard && sizes[revealCard.key])]);
 
+  // The wheel scrolls the canvas (Shift: sideways); Ctrl+wheel and a trackpad pinch zoom at the
+  // pointer. A native listener, because React's wheel listener is passive and cannot keep the
+  // page from zooming or scrolling as well.
   const onWheel = (e) => {
+    const host = hostRef.current;
+    if (!host || e.target.closest('.diagram-tools, .diagram-legend, .link-hint')) return;
+    e.preventDefault();
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? host.clientHeight : 1;
+    let dx = e.deltaX * unit;
+    let dy = e.deltaY * unit;
     moved.current = true;
-    if (e.ctrlKey) {
-      const host = hostRef.current.getBoundingClientRect();
-      const mx = e.clientX - host.left;
-      const my = e.clientY - host.top;
-      setView((v) => {
-        const k = Math.min(1.6, Math.max(0.4, v.k * (e.deltaY < 0 ? 1.1 : 0.9)));
-        return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k };
-      });
-    } else setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
+    if (e.ctrlKey || e.metaKey) {
+      const b = host.getBoundingClientRect();
+      const from = anim.current.to || live.current;
+      // A mouse wheel notch (100) zooms by about 15%; a pinch sends many small steps.
+      const f = Math.exp(-dy * (Math.abs(dy) < 40 ? 0.01 : 0.0015));
+      glide(zoomAround(from, e.clientX - b.left, e.clientY - b.top, clampK(from.k * Math.min(1.3, Math.max(0.77, f)))));
+      return;
+    }
+    if (e.shiftKey && !dx) {
+      dx = dy;
+      dy = 0;
+    }
+    stopGlide();
+    const v = live.current;
+    put({ ...v, x: v.x - dx, y: v.y - dy });
   };
+  const wheelRef = useRef(onWheel);
+  wheelRef.current = onWheel;
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return undefined;
+    const fn = (e) => wheelRef.current(e);
+    host.addEventListener('wheel', fn, { passive: false });
+    return () => host.removeEventListener('wheel', fn);
+  }, []);
   const zoomBy = (f) => {
     moved.current = true;
     const host = hostRef.current;
-    const mx = host.clientWidth / 2;
-    const my = host.clientHeight / 2;
-    setView((v) => {
-      const k = Math.min(1.6, Math.max(0.4, v.k * f));
-      return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k };
-    });
+    const from = anim.current.to || live.current;
+    glide(zoomAround(from, host.clientWidth / 2, host.clientHeight / 2, clampK(from.k * f)));
+  };
+  const zoomTo = (k) => {
+    moved.current = true;
+    const host = hostRef.current;
+    glide(zoomAround(live.current, host.clientWidth / 2, host.clientHeight / 2, k));
   };
 
   const pickForLink = (cls) => {
@@ -604,58 +739,194 @@ export default function Diagram({ model }) {
   const trackLink = (e) => {
     if (!linking || !linking.from) return;
     const host = hostRef.current.getBoundingClientRect();
-    setLinkAt({ x: (e.clientX - host.left - view.x) / view.k, y: (e.clientY - host.top - view.y) / view.k });
+    const v = live.current;
+    setLinkAt({ x: (e.clientX - host.left - v.x) / v.k, y: (e.clientY - host.top - v.y) / v.k });
   };
 
-  const startPan = (e) => {
-    if (e.button !== 0 || e.target.closest('.dcard') || e.target.closest('button')) return;
-    if (linking) setLinking(null);
-    setState({ selectedClass: null });
-    setPanning(true);
-    let lx = e.clientX;
-    let ly = e.clientY;
-    const move = (ev) => {
-      moved.current = true;
-      setView((v) => ({ ...v, x: v.x + ev.clientX - lx, y: v.y + ev.clientY - ly }));
-      lx = ev.clientX;
-      ly = ev.clientY;
-    };
-    const up = () => {
-      setPanning(false);
+  /** Follows one pointer until it lets go: on the window, so it keeps working outside the panel,
+      and captured where the platform allows it (a synthetic pointer cannot be captured). */
+  const follow = (e, el, move, end) => {
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch { /* synthetic pointer */ }
+    const up = (ev) => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      window.removeEventListener('blur', up);
+      try {
+        el.releasePointerCapture(e.pointerId);
+      } catch { /* synthetic pointer */ }
+      end(ev);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    window.addEventListener('blur', up);
   };
 
+  /** Drags the whole diagram: the empty canvas with the left button, anywhere with the middle
+      button or with Space held. A click on the empty canvas (no movement) clears the selection. */
+  const startPan = (e, clickClears) => {
+    const host = hostRef.current;
+    e.preventDefault();
+    stopGlide();
+    if (linking) {
+      setLinking(null);
+      setLinkAt(null);
+    }
+    if (document.activeElement !== host && !host.contains(document.activeElement)) host.focus({ preventScroll: true });
+    let lx = e.clientX;
+    let ly = e.clientY;
+    let travel = 0;
+    setPanning(true);
+    document.documentElement.classList.add('diagram-panning');
+    follow(e, host, (ev) => {
+      const dx = ev.clientX - lx;
+      const dy = ev.clientY - ly;
+      lx = ev.clientX;
+      ly = ev.clientY;
+      if (!dx && !dy) return;
+      travel += Math.abs(dx) + Math.abs(dy);
+      moved.current = true;
+      const v = live.current;
+      put({ ...v, x: v.x + dx, y: v.y + dy });
+    }, (ev) => {
+      setPanning(false);
+      document.documentElement.classList.remove('diagram-panning');
+      if (clickClears && travel < 4 && ev.type === 'pointerup') {
+        setState({ selectedClass: null });
+        setMulti([]);
+      }
+    });
+  };
+
+  /** Shift+drag on the empty canvas: a rectangle picks every card it touches (added to the cards
+      picked before). */
+  const startBand = (e) => {
+    const host = hostRef.current;
+    e.preventDefault();
+    stopGlide();
+    const b = host.getBoundingClientRect();
+    const x0 = e.clientX - b.left;
+    const y0 = e.clientY - b.top;
+    const before = [...new Set([...multi, ...(selected && keys.includes(selected) ? [selected] : [])])];
+    setBand({ x0, y0, x1: x0, y1: y0 });
+    document.documentElement.classList.add('diagram-banding');
+    follow(e, host, (ev) => {
+      const x1 = ev.clientX - b.left;
+      const y1 = ev.clientY - b.top;
+      setBand({ x0, y0, x1, y1 });
+      const v = live.current;
+      const r = { x: (Math.min(x0, x1) - v.x) / v.k, y: (Math.min(y0, y1) - v.y) / v.k, w: Math.abs(x1 - x0) / v.k, h: Math.abs(y1 - y0) / v.k };
+      const hit = Object.entries(rectsRef.current).filter(([, c]) => c.x < r.x + r.w && c.x + c.w > r.x && c.y < r.y + r.h && c.y + c.h > r.y).map(([k]) => k);
+      setMulti([...new Set([...before, ...hit])]);
+    }, () => {
+      setBand(null);
+      document.documentElement.classList.remove('diagram-banding');
+    });
+  };
+
+  const onCanvasDown = (e) => {
+    if (e.target.closest('.dcard, button, .diagram-tools, .diagram-legend, .link-hint')) return;
+    if (e.button !== 0) return;
+    if (e.shiftKey && !linking) startBand(e);
+    else startPan(e, true);
+  };
+  // Middle button or Space: panning wins over everything, even over a card.
+  const onCanvasDownCapture = (e) => {
+    if (e.button === 1 || (e.button === 0 && spaceRef.current)) {
+      e.stopPropagation();
+      startPan(e, false);
+    }
+  };
+
+  /** Ctrl- or Shift-click adds a card to the picked ones or takes it out again. */
+  const pick = (key, ev) => {
+    if (ev && (ev.ctrlKey || ev.metaKey || ev.shiftKey)) {
+      const base = multi.length ? multi : selected && keys.includes(selected) ? [selected] : [];
+      const next = base.includes(key) ? base.filter((k) => k !== key) : [...base, key];
+      setMulti(next);
+      // Focusing the card selected it on the way; taking it out again means it is not selected.
+      if (!next.includes(key) && getState().selectedClass === key) setState({ selectedClass: null });
+      return;
+    }
+    setMulti([]);
+    if (!key.startsWith('pkg:')) setState({ selectedClass: key });
+  };
+
+  /** Drags a card, or all picked cards together when it is one of them. They snap to an 8px grid
+      as a group, so they keep their places relative to each other. */
   const startDrag = (e, key, onClick) => {
     if (e.button !== 0) return;
     e.stopPropagation();
+    stopGlide();
+    const group = multi.length > 1 && multi.includes(key) ? multi.filter((k) => keys.includes(k)) : [key];
     const start = { x: e.clientX, y: e.clientY };
-    const origin = { ...pos(key) };
-    let moved = false;
-    const move = (ev) => {
-      const dx = (ev.clientX - start.x) / view.k;
-      const dy = (ev.clientY - start.y) / view.k;
-      if (!moved && Math.abs(dx) + Math.abs(dy) < 4) return;
+    const origin = Object.fromEntries(group.map((k) => [k, { ...pos(k) }]));
+    const k0 = live.current.k;
+    const all = Object.fromEntries(keys.map((k) => [k, { ...pos(k) }]));
+    let dragged = false;
+    follow(e, e.currentTarget, (ev) => {
+      const dx = (ev.clientX - start.x) / k0;
+      const dy = (ev.clientY - start.y) / k0;
+      if (!dragged && Math.abs(dx) + Math.abs(dy) < 4) return;
       // The first card the user moves pins the whole flow layout of this package as it is shown.
-      if (!moved && flow) A.pinLayout(pkg, Object.fromEntries(keys.map((k) => [k, { ...pos(k) }])));
-      moved = true;
-      setDragging(key);
-      A.setPosition(key, { x: Math.round(origin.x + dx), y: Math.round(origin.y + dy) });
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
+      if (!dragged && flow) A.pinLayout(pkg, all);
+      dragged = true;
+      setDragging(group);
+      A.pinLayout(pkg, Object.fromEntries(group.map((k) => [k, { x: Math.round(origin[k].x + dx), y: Math.round(origin[k].y + dy) }])));
+    }, () => {
       setDragging(null);
-      if (moved) {
+      if (dragged) {
         const p = getState().positions[key];
-        A.setPosition(key, { x: Math.round(p.x / SNAP) * SNAP, y: Math.round(p.y / SNAP) * SNAP });
-      } else onClick && onClick();
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
+        const sx = Math.round(p.x / SNAP) * SNAP - p.x;
+        const sy = Math.round(p.y / SNAP) * SNAP - p.y;
+        A.pinLayout(pkg, Object.fromEntries(group.map((k) => {
+          const q = getState().positions[k];
+          return [k, { x: q.x + sx, y: q.y + sy }];
+        })));
+      } else if (onClick) onClick(e);
+    });
+  };
+
+  const onCanvasKey = (e) => {
+    if (e.target.closest('input, textarea, select')) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (e.key === 'Escape') {
+      setMulti([]);
+      setBand(null);
+    } else if (mod && (e.key === '+' || e.key === '=')) {
+      e.preventDefault();
+      zoomBy(1.2);
+    } else if (mod && e.key === '-') {
+      e.preventDefault();
+      zoomBy(1 / 1.2);
+    } else if (mod && e.key === '0') {
+      e.preventDefault();
+      fit({ animate: true, all: true });
+    } else if (mod && e.key.toLowerCase() === 'a' && keys.length) {
+      e.preventDefault();
+      setMulti([...keys]);
+    }
+  };
+
+  /** Right-click on the empty canvas. */
+  const canvasMenu = (e) => {
+    if (e.target.closest('.dcard, .diagram-tools, .diagram-legend, .link-hint')) return;
+    e.preventDefault();
+    A.openMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: [
+        { label: t('ws.newClass'), icon: 'plus', disabled: readOnly, onClick: () => A.openDialogBox({ type: 'newClass' }) },
+        { label: t('diagram.newPackage'), icon: 'folderPlus', disabled: readOnly, onClick: () => A.openDialogBox({ type: 'newPackage' }) },
+        { type: 'sep' },
+        { label: t('diagram.fit'), icon: 'fit', disabled: !keys.length, onClick: () => fit({ animate: true, all: true }) },
+        { label: t('diagram.arrange'), icon: 'arrange', disabled: readOnly || !keys.length, onClick: A.arrange },
+        { label: t('diagram.saveImage'), icon: 'image', disabled: !keys.length, onClick: exportImage },
+      ],
+    });
   };
 
   const compiledOk = compile.state === 'ok' && benchState !== 'off';
@@ -681,10 +952,10 @@ export default function Diagram({ model }) {
           </>
         )}
         <button className="icon-btn" aria-pressed={details} aria-label={t('diagram.details')} title={t('diagram.details')} onClick={() => A.updateSettings({ diagramDetails: !details })}>
-          <Icon name="layers" />
+          <Icon name="details" />
         </button>
         <button className="icon-btn" aria-pressed={showUses} aria-label={t('diagram.showUses')} title={t('diagram.showUses')} onClick={() => A.updateSettings({ showUses: !showUses })}>
-          <Icon name="link" />
+          <Icon name="uses" />
         </button>
         {!readOnly && (
           <button className="icon-btn" data-tour="arrange" aria-label={t('diagram.arrange')} title={t('diagram.arrange')} onClick={A.arrange}>
@@ -721,7 +992,25 @@ export default function Diagram({ model }) {
           <Icon name="more" />
         </button>
       </div>
-      <div className={'diagram' + (panning ? ' panning' : '') + (compact ? ' compact' : '') + (linking ? ' linking' : '')} data-tour="diagram" ref={hostRef} onPointerDown={startPan} onPointerMove={trackLink} onWheel={onWheel} style={{ backgroundSize: `${gridStep}px ${gridStep}px`, backgroundPosition: `${view.x}px ${view.y}px` }}>
+      <div
+        className={'diagram' + (panning ? ' panning' : '') + (space ? ' space' : '') + (compact ? ' compact' : '') + (linking ? ' linking' : '') + (active ? ' focusing' : '')}
+        data-tour="diagram"
+        ref={hostRef}
+        tabIndex={-1}
+        onPointerDownCapture={onCanvasDownCapture}
+        onPointerDown={onCanvasDown}
+        onPointerMove={(e) => {
+          overRef.current = true;
+          trackLink(e);
+        }}
+        onPointerLeave={() => {
+          overRef.current = false;
+        }}
+        onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+        onContextMenu={canvasMenu}
+        onKeyDown={onCanvasKey}
+        style={{ backgroundSize: `${gridStep}px ${gridStep}px`, backgroundPosition: `${Math.round(view.x)}px ${Math.round(view.y)}px` }}
+      >
         {keys.length === 0 && !pkg ? (
           <div className="diagram-empty">
             <span>{t('diagram.empty')}</span>
@@ -731,35 +1020,24 @@ export default function Diagram({ model }) {
             </button>
           </div>
         ) : (
-          <div className="world" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}>
+          // Whole pixels for the shift, so lines and text stay sharp at 100%.
+          <div className="world" style={{ transform: `translate(${Math.round(view.x)}px, ${Math.round(view.y)}px) scale(${view.k})` }}>
             <svg className="edges" width="1" height="1">
-              {straight.map((e, i) => (
-                <Edge
-                  key={i}
-                  from={rects[e.from]}
-                  to={rects[e.to]}
-                  kind={e.kind}
-                  points={routes.has(e) ? routes.get(e).pts : null}
-                  hl={highlight && (e.from === highlight || e.to === highlight) && e.kind !== 'uses'}
-                />
-              ))}
-              {[...trees.entries()].map(([id, tr]) => (
-                <InheritTree key={id} parent={rects[tr.parent]} kids={tr.kids} kind={tr.kind} hl={highlight === tr.parent} />
-              ))}
+              <Relations routes={routes} active={active} />
               {linking && linking.from && linkAt && rects[linking.from] && (
                 <path className="link-preview" d={`M${rects[linking.from].x + rects[linking.from].w / 2},${rects[linking.from].y + rects[linking.from].h / 2}L${linkAt.x},${linkAt.y}`} />
               )}
             </svg>
 
             {readme && !pkg && (
-              <div className="dcard note-card" data-tour="readme" style={{ left: noteAt.x, top: noteAt.y }} onDoubleClick={A.openReadme} onClick={A.openReadme} role="button" tabIndex={0} title={readme.name}>
+              <div ref={noteRef} className="dcard note-card" data-tour="readme" style={{ left: noteAt.x, top: noteAt.y }} onDoubleClick={A.openReadme} onClick={A.openReadme} role="button" tabIndex={0} title={readme.name}>
                 <Icon name="file" />
                 <span>{readme.name}</span>
               </div>
             )}
 
             {pkg && (
-              <div className="dcard pkg-card up" style={{ left: noteAt.x, top: noteAt.y }} onDoubleClick={() => A.enterPackage(pkg.includes('.') ? pkg.slice(0, pkg.lastIndexOf('.')) : '')} onClick={() => A.enterPackage(pkg.includes('.') ? pkg.slice(0, pkg.lastIndexOf('.')) : '')} role="button" tabIndex={0}>
+              <div ref={noteRef} className="dcard pkg-card up" style={{ left: noteAt.x, top: noteAt.y }} onDoubleClick={() => A.enterPackage(pkg.includes('.') ? pkg.slice(0, pkg.lastIndexOf('.')) : '')} onClick={() => A.enterPackage(pkg.includes('.') ? pkg.slice(0, pkg.lastIndexOf('.')) : '')} role="button" tabIndex={0}>
                 <span className="pkg-tab" />
                 <span className="pkg-name">{t('diagram.up')}</span>
               </div>
@@ -772,10 +1050,10 @@ export default function Diagram({ model }) {
                 <div
                   key={k}
                   ref={(el) => { cardRefs.current[k] = el; }}
-                  className={'dcard pkg-card' + (dragging === k ? ' dragging' : '')}
+                  className={'dcard pkg-card' + (dragging && dragging.includes(k) ? ' dragging' : '') + (multi.includes(k) ? ' selected' : '')}
                   data-tour={'package:' + p}
                   style={{ left: pos(k).x, top: pos(k).y }}
-                  onPointerDown={(e) => startDrag(e, k)}
+                  onPointerDown={(e) => startDrag(e, k, (ev) => (ev.ctrlKey || ev.metaKey || ev.shiftKey) && pick(k, ev))}
                   onDoubleClick={() => A.enterPackage(p)}
                   onKeyDown={(e) => e.key === 'Enter' && A.enterPackage(p)}
                   role="button"
@@ -804,11 +1082,13 @@ export default function Diagram({ model }) {
                 <div
                   key={cls}
                   ref={(el) => { cardRefs.current[cls] = el; }}
-                  className={['dcard', 'class-card', info.kind, info.isTest ? 'test' : '', stale ? 'uncompiled' : '', selected === cls || (linking && linking.from === cls) ? 'selected' : '', highlight === cls ? 'hl' : '', dragging === cls ? 'dragging' : ''].join(' ')}
+                  className={['dcard', 'class-card', info.kind, info.isTest ? 'test' : '', stale ? 'uncompiled' : '', selected === cls || multi.includes(cls) || (linking && linking.from === cls) ? 'selected' : '', highlight === cls ? 'hl' : '', related.has(cls) ? 'related' : '', dragging && dragging.includes(cls) ? 'dragging' : ''].filter(Boolean).join(' ')}
                   data-tour={'class:' + cls}
                   style={{ left: p.x, top: p.y }}
+                  onPointerEnter={() => setHover(cls)}
+                  onPointerLeave={() => setHover((h) => (h === cls ? null : h))}
                   onPointerDown={(e) => {
-                    if (!linking) return startDrag(e, cls, () => setState({ selectedClass: cls }));
+                    if (!linking) return startDrag(e, cls, (ev) => pick(cls, ev));
                     if (e.button !== 0) return undefined;
                     e.stopPropagation();
                     return pickForLink(cls);
@@ -888,32 +1168,28 @@ export default function Diagram({ model }) {
             <button className="link" onPointerDown={(e) => e.stopPropagation()} onClick={() => setLinking(null)}>{t('common.cancel')}</button>
           </div>
         )}
+        {band && (
+          <div
+            className="band"
+            aria-hidden="true"
+            style={{ left: Math.min(band.x0, band.x1), top: Math.min(band.y0, band.y1), width: Math.abs(band.x1 - band.x0), height: Math.abs(band.y1 - band.y0) }}
+          />
+        )}
         <div className="diagram-tools" data-tour="zoom">
-          <button className="icon-btn" aria-label={t('diagram.zoomOut')} title={t('diagram.zoomOut')} onClick={() => zoomBy(0.85)}><Icon name="minus" /></button>
-          <span className="zoom-label">{Math.round(view.k * 100)}%</span>
-          <button className="icon-btn" aria-label={t('diagram.zoomIn')} title={t('diagram.zoomIn')} onClick={() => zoomBy(1.15)}><Icon name="plus" /></button>
-          <button className="icon-btn" aria-label={t('diagram.fit')} title={t('diagram.fit')} onClick={() => fit()}><Icon name="fit" /></button>
+          <button className="icon-btn" aria-label={t('diagram.zoomOut')} title={t('diagram.zoomOut') + ' · ' + formatKeys(lang, 'ctrl') + ' −'} onClick={() => zoomBy(1 / 1.2)}><Icon name="minus" /></button>
+          <button className="zoom-label" title={t('diagram.zoom100')} aria-label={t('diagram.zoom100')} onClick={() => zoomTo(1)}>{Math.round(view.k * 100)}%</button>
+          <button className="icon-btn" aria-label={t('diagram.zoomIn')} title={t('diagram.zoomIn') + ' · ' + formatKeys(lang, 'ctrl') + ' +'} onClick={() => zoomBy(1.2)}><Icon name="plus" /></button>
+          <span className="tools-rule" aria-hidden="true" />
+          <button className="icon-btn" aria-label={t('diagram.fit')} title={t('diagram.fit') + ' · ' + formatKeys(lang, 'ctrl 0', '+')} onClick={() => fit({ animate: true, all: true })}><Icon name="fit" /></button>
         </div>
         {kinds.size > 0 && (
-          <div className="diagram-legend" aria-hidden="true">
-            {kinds.has('extends') && (
-              <span>
-                <svg viewBox="0 0 26 10"><path d="M1 5h16" stroke="var(--edge)" /><path d="M24 5l-7 -4v8z" fill="var(--surface)" stroke="var(--edge)" /></svg>
-                {t('diagram.legend.extends')}
+          <div className="diagram-legend" aria-hidden="true" title={t('diagram.panHint')}>
+            {['extends', 'impl', 'uses'].filter((k) => kinds.has(k)).map((k) => (
+              <span key={k} className="legend-item">
+                <Glyph kind={k} />
+                {t(k === 'impl' ? 'diagram.legend.implements' : 'diagram.legend.' + k)}
               </span>
-            )}
-            {kinds.has('impl') && (
-              <span>
-                <svg viewBox="0 0 26 10"><path d="M1 5h16" stroke="var(--edge)" strokeDasharray="4 3" /><path d="M24 5l-7 -4v8z" fill="var(--surface)" stroke="var(--edge)" /></svg>
-                {t('diagram.legend.implements')}
-              </span>
-            )}
-            {kinds.has('uses') && (
-              <span>
-                <svg viewBox="0 0 26 10"><path d="M1 5h22" stroke="var(--edge)" strokeDasharray="3 3" /><path d="M18 1l6 4-6 4" fill="none" stroke="var(--edge)" /></svg>
-                {t('diagram.legend.uses')}
-              </span>
-            )}
+            ))}
           </div>
         )}
       </div>

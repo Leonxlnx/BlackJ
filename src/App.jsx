@@ -93,6 +93,11 @@ export default function App() {
       } else if (mod && key === 'i') {
         e.preventDefault();
         if (!s.settings.aiOff) setState({ aiPrompt: { at: Date.now() } });
+      } else if (e.key === 'F5' && e.shiftKey) {
+        // Stop, as in most IDEs: whatever runs (a loop, input, a window, the debugger).
+        e.preventDefault();
+        const b = s.bench;
+        if (b.state === 'running' || b.state === 'waiting' || (b.live && b.liveFrom !== 'bench') || paused || s.debug.armed) A.stopProgram();
       } else if (e.key === 'F5') {
         e.preventDefault();
         const mains = A.modelOf(s.files).list.filter((c) => c.hasMain);
@@ -142,7 +147,7 @@ export default function App() {
         </div>
       )}
       {toast && (
-        <div className={'toast' + (toast.kind === 'bad' ? ' bad' : '') + (current !== 'project' ? ' on-page' : '')} role="status" key={toast.id}>
+        <div className={'toast' + (toast.kind === 'bad' ? ' bad' : '') + (current !== 'project' ? ' on-page' : ' in-ws')} role="status" key={toast.id}>
           {toast.text}
         </div>
       )}

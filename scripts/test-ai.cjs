@@ -115,7 +115,8 @@ const AGENT = { mode: 'explain', exercise: false, testFiles: [], readCode: true,
   assert.ok(sys(r1.body).includes('Modus: Tipps'));
   assert.strictEqual(r1.body.system[0].cache_control.type, 'ephemeral');
   assert.strictEqual(r1.body.cache_control.type, 'ephemeral');
-  assert.ok(Array.isArray(r1.body.tools) && r1.body.tools.length === 17 && r1.body.tools.every((t) => t.eager_input_streaming === true));
+  assert.ok(Array.isArray(r1.body.tools) && r1.body.tools.length === 20 && r1.body.tools.every((t) => t.eager_input_streaming === true));
+  for (const name of ['update_plan', 'look_at_program', 'use_program']) assert.ok(r1.body.tools.some((t) => t.name === name), name);
   assert.strictEqual(r1.body.messages.length, 1);
   assert.ok(r1.body.messages[0].content[0].text.includes('1| public class Hund {'));
   const done = events.find((e) => e.type === 'done');
@@ -495,6 +496,155 @@ const AGENT = { mode: 'explain', exercise: false, testFiles: [], readCode: true,
     assert.deepStrictEqual(calls.map((c) => c.name), ['create_class', 'compile']);
     assert.ok(historyValid(b.messages));
     console.log('  ok   build mode keeps working until something is built and compiles');
+  }
+
+  // ---------------------------------------------------------------- 17. screenshots in tool results
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+  {
+    reset();
+    const { tutor: tu } = make();
+    toolImpl = async (call) => (call.name === 'look_at_program'
+      ? { content: '{"window":{"title":"Feld","width":320,"height":200}}', images: [{ media_type: 'image/png', data: PNG }, { media_type: 'image/png', data: 'not base64 !!' }, { data: PNG }] }
+      : { content: '', images: [{ media_type: 'image/png', data: PNG }] });
+    queue.push(message([{ type: 'tool_use', id: 'tu_l', name: 'look_at_program', input: { class: 'Feld', resize_to: { width: 640, height: 400 } } }, { type: 'tool_use', id: 'tu_u', name: 'use_program', input: { steps: [{ do: 'key', key: 'RIGHT' }, { do: 'shot' }] } }], 'tool_use'), answer('Sieht gut aus.'));
+    await ask(tu, 'Schau es dir an', 'a17');
+    const res = requests[1].body.messages[2].content;
+    const look = res[0];
+    assert.ok(Array.isArray(look.content) && look.content[0].type === 'text' && look.content[0].text.includes('"title":"Feld"'), JSON.stringify(look).slice(0, 300));
+    const imgs = look.content.filter((b) => b.type === 'image');
+    assert.strictEqual(imgs.length, 2, 'the broken image is dropped, a missing media type becomes PNG');
+    assert.deepStrictEqual(imgs[0].source, { type: 'base64', media_type: 'image/png', data: PNG });
+    // A result with only a picture still has a (non-empty) text block first.
+    assert.ok(res[1].content[0].type === 'text' && res[1].content[0].text.length > 0 && res[1].content[1].type === 'image');
+    assert.ok(historyValid(tu.messages));
+    // An error result never carries pictures.
+    reset();
+    const { tutor: tu2 } = make();
+    toolImpl = async () => ({ content: 'No window.', isError: true, images: [{ media_type: 'image/png', data: PNG }] });
+    queue.push(toolUse('tu_e', 'look_at_program', {}), answer('Kein Fenster.'));
+    await ask(tu2, 'Schau', 'a17b');
+    assert.strictEqual(requests[1].body.messages[2].content[0].content, 'No window.');
+    console.log('  ok   screenshots go back as image blocks after the text, bad ones are dropped');
+  }
+
+  // ---------------------------------------------------------------- 18. the new tools' input rules
+  {
+    assert.strictEqual(validateToolInput('look_at_program', {}), null);
+    assert.strictEqual(validateToolInput('look_at_program', { class: 'Feld', wait_ms: 500, resize_to: { width: 800, height: 600 }, keep_running: true }), null);
+    assert.ok(validateToolInput('look_at_program', { class: '../Feld' }));
+    assert.ok(validateToolInput('look_at_program', { resize_to: { width: 20, height: 600 } }));
+    assert.strictEqual(validateToolInput('use_program', { steps: [{ do: 'key', key: 'SPACE', hold_ms: 200 }, { do: 'click', x: 10, y: 20, button: 3 }, { do: 'wait', ms: 300 }, { do: 'type', text: 'Anna' }, { do: 'resize', width: 600, height: 400 }, { do: 'shot' }] }), null);
+    assert.ok(/needs key/.test(validateToolInput('use_program', { steps: [{ do: 'key' }] })));
+    assert.ok(/needs y/.test(validateToolInput('use_program', { steps: [{ do: 'click', x: 3 }] })));
+    assert.ok(/does not take/.test(validateToolInput('use_program', { steps: [{ do: 'wait', ms: 10, key: 'A' }] })));
+    assert.ok(/at most 3 shot/.test(validateToolInput('use_program', { steps: [{ do: 'shot' }, { do: 'shot' }, { do: 'shot' }, { do: 'shot' }] })));
+    assert.ok(/at most 20000/.test(validateToolInput('use_program', { steps: Array.from({ length: 5 }, () => ({ do: 'wait', ms: 5000 })) })));
+    assert.ok(validateToolInput('use_program', { steps: [] }));
+    assert.strictEqual(validateToolInput('update_plan', { items: [{ text: 'A', status: 'done' }, { text: 'B', status: 'in_progress' }, { text: 'C', status: 'pending' }] }), null);
+    assert.ok(/only one/.test(validateToolInput('update_plan', { items: [{ text: 'A', status: 'in_progress' }, { text: 'B', status: 'in_progress' }] })));
+    assert.ok(validateToolInput('update_plan', { items: [{ text: 'A', status: 'later' }] }));
+    // While a tutorial runs: the checklist may change, the program may not start.
+    assert.strictEqual(checkPolicy('update_plan', { items: [] }, AGENT, { tour: true }), null);
+    assert.ok(checkPolicy('look_at_program', {}, AGENT, { tour: true }));
+    // Exercises in hints mode: looking is fine, it writes nothing.
+    assert.strictEqual(checkPolicy('look_at_program', {}, { mode: 'hints', exercise: true, testFiles: [] }, { tour: false }), null);
+    console.log('  ok   update_plan, look_at_program and use_program: inputs checked, allowed where they fit');
+  }
+
+  // ---------------------------------------------------------------- 19. update_plan keeps the turn going
+  {
+    reset();
+    const { tutor: tu, events: ev } = make();
+    tu.newChat({ lang: 'de', mode: 'explain' });
+    const items = (a, b) => ({ items: [{ text: 'Lesen', status: a }, { text: 'Ändern', status: b }] });
+    queue.push(
+      toolUse('tu_p1', 'update_plan', items('in_progress', 'pending')),
+      answer('Ich habe es gelesen.'),
+      toolUse('tu_p2', 'update_plan', items('done', 'done')),
+      answer('Fertig.'),
+    );
+    await tu.send({ text: 'Mach zwei Dinge', model: MODEL, lang: 'de', mode: 'explain', turnId: 'a19', agent: AGENT });
+    assert.strictEqual(requests.length, 4);
+    const pushed = requests[2].body.messages[requests[2].body.messages.length - 1].content.map((x) => x.text || '').join('');
+    assert.ok(pushed.startsWith('Dein Plan hat noch offene Punkte') && pushed.includes('„Lesen“') && pushed.includes('„Ändern“'), pushed);
+    assert.deepStrictEqual(calls.map((c) => c.name), ['update_plan', 'update_plan']);
+    assert.ok(of(ev, 'a19').some((x) => x.type === 'done'));
+    // A checklist that stays open is pushed back only once.
+    reset();
+    const { tutor: tu2 } = make();
+    tu2.newChat({ lang: 'en', mode: 'explain' });
+    queue.push(toolUse('tu_p3', 'update_plan', items('in_progress', 'pending')), answer('Stopping here.'), answer('Still stopping.'));
+    await tu2.send({ text: 'Do two things', model: MODEL, lang: 'en', mode: 'explain', turnId: 'a19b', agent: AGENT });
+    assert.strictEqual(requests.length, 3);
+    assert.ok(requests[2].body.messages[requests[2].body.messages.length - 1].content[0].text.startsWith('Your checklist still has open items: "Lesen"'));
+    // Hints mode never pushes.
+    reset();
+    const { tutor: tu3 } = make();
+    queue.push(toolUse('tu_p4', 'update_plan', items('in_progress', 'pending')), answer('Tipp: schau in Zeile 3.'));
+    await ask(tu3, 'Hilf mir', 'a19c');
+    assert.strictEqual(requests.length, 2);
+    console.log('  ok   update_plan: open items send the turn back once (not in hints mode)');
+  }
+
+  // ---------------------------------------------------------------- 20. build mode looks at its window
+  {
+    reset();
+    const gui = 'import javax.swing.*;\npublic class Feld extends JPanel {\n}\n';
+    toolImpl = async (call) => {
+      if (call.name === 'compile') return { content: '{"ok":true,"ms":90}' };
+      if (call.name === 'look_at_program') return { content: '{"window":{"title":"Feld"}}', images: [{ media_type: 'image/png', data: PNG }] };
+      return { content: '{"status":"applied","file":"Feld.java"}' };
+    };
+    const { tutor: b } = make();
+    b.newChat({ lang: 'de', mode: 'build' });
+    queue.push(
+      toolUse('tu_g1', 'create_class', { name: 'Feld', content: gui }),
+      toolUse('tu_g2', 'compile', {}),
+      answer('Fertig gebaut.'),
+      toolUse('tu_g3', 'look_at_program', { class: 'Feld' }),
+      answer('Angesehen, alles gut.'),
+    );
+    await b.send({ text: 'Baue ein Fenster', model: MODEL, lang: 'de', mode: 'build', turnId: 'a20', agent: { ...AGENT, mode: 'build' } });
+    assert.strictEqual(requests.length, 5);
+    const last = (i) => requests[i].body.messages[requests[i].body.messages.length - 1].content.map((x) => x.text || '').join('');
+    assert.ok(last(3).startsWith('Das Programm hat ein Fenster'), last(3));
+    assert.deepStrictEqual(calls.map((c) => c.name), ['create_class', 'compile', 'look_at_program']);
+    // An edit after looking means looking again: the push comes only once per turn, though.
+    reset();
+    toolImpl = async (call) => (call.name === 'compile' ? { content: '{"ok":true}' } : call.name === 'look_at_program' ? { content: '{}', images: [{ data: PNG }] } : { content: '{"status":"applied","gui":true}' });
+    const { tutor: b2 } = make();
+    b2.newChat({ lang: 'de', mode: 'build' });
+    queue.push(
+      toolUse('tu_h1', 'edit_file', { path: 'Spiel.java', old_text: 'a', new_text: 'b' }),
+      toolUse('tu_h2', 'compile', {}),
+      answer('Fertig.'),
+      answer('Wirklich fertig.'),
+    );
+    await b2.send({ text: 'Mach es schneller', model: MODEL, lang: 'de', mode: 'build', turnId: 'a20b', agent: { ...AGENT, mode: 'build' } });
+    assert.strictEqual(requests.length, 4, 'the window flag from the write result counts; one push only');
+    assert.ok(historyValid(b2.messages));
+    console.log('  ok   build mode: a window program is looked at before the turn ends');
+  }
+
+  // ---------------------------------------------------------------- 21. a resumed build remembers what it built
+  {
+    reset();
+    toolImpl = async (call) => ({ content: call.name === 'compile' ? '{"ok":true}' : '{"status":"applied","file":"Spiel.java"}' });
+    const { tutor: b, events: ev } = make();
+    b.newChat({ lang: 'de', mode: 'build' });
+    queue.push(toolUse('tu_r1', 'create_class', { name: 'Spiel', content: 'public class Spiel {\n}\n' }), toolUse('tu_r2', 'compile', {}), { status: 529, json: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } });
+    // The SDK retries 529 twice by itself: three failures surface the error.
+    queue.push({ status: 529, json: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } }, { status: 529, json: { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } } });
+    await b.send({ text: 'Baue ein Spiel', model: MODEL, lang: 'de', mode: 'build', turnId: 'a21', agent: { ...AGENT, mode: 'build' } });
+    const err = of(ev, 'a21').find((x) => x.type === 'error');
+    assert.ok(err && err.partial === true && ['server', 'overloaded'].includes(err.code), JSON.stringify(err));
+    const n = requests.length;
+    queue.push(answer('Fertig gebaut.'));
+    await b.continue({ turnId: 'a21', model: MODEL, agent: { ...AGENT, mode: 'build' }, stepBase: 3 });
+    assert.strictEqual(requests.length, n + 1, 'no "nothing is built yet" push after resuming');
+    assert.ok(of(ev, 'a21').some((x) => x.type === 'done'));
+    assert.ok(historyValid(b.messages));
+    console.log('  ok   a resumed turn keeps what it did (no false push back to work)');
   }
 
   fs.rmSync(dir, { recursive: true, force: true });

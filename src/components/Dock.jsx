@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useStore, setState, getState } from '../store.js';
 import { useT, translate } from '../i18n.js';
 import A, { PANEL } from '../panels.js';
@@ -9,6 +9,9 @@ import CodePad from './CodePad.jsx';
 import TestsPanel from './TestsPanel.jsx';
 import DebugPanel from './DebugPanel.jsx';
 import PopOut from './PopOut.jsx';
+import RunStrip, { useRunState } from './RunStrip.jsx';
+import { StopGlyph, PromptGlyph, ReturnGlyph, StartingGlyph, FaultGlyph } from './RuntimeGlyphs.jsx';
+import { benchReasonText } from '../actions.js';
 
 function methodLabel(m) {
   return (
@@ -61,10 +64,23 @@ function Bench() {
   const benchState = useStore((s) => s.bench.state);
   const lastNew = useStore((s) => s.bench.lastNew);
   const inspected = useStore((s) => s.inspect && s.inspect.ref);
+  const starting = useStore((s) => !!s.bench.starting);
+  const error = useStore((s) => s.bench.error);
   if (!objects.length) {
+    let line;
+    if (benchState === 'off' && starting) line = <span className="rt-empty"><StartingGlyph />{t('runtime.status.starting')}</span>;
+    else if (benchState === 'off' && error) {
+      line = (
+        <span className="rt-empty rt-empty-bad">
+          <FaultGlyph />
+          <span>{t('runtime.startFailed', { reason: benchReasonText(error) })}</span>
+          <button className="rt-key" onClick={() => A.stopProgram({ quiet: true })}>{t('runtime.retry')}</button>
+        </span>
+      );
+    } else line = benchState === 'off' ? <>{t('bench.emptyNotCompiled')} <kbd>{t('bench.compileKey')}</kbd></> : t('bench.empty');
     return (
       <div className="dock-empty" data-tour="bench">
-        <div className="empty-line">{benchState === 'off' ? <>{t('bench.emptyNotCompiled')} <kbd>{t('bench.compileKey')}</kbd></> : t('bench.empty')}</div>
+        <div className="empty-line">{line}</div>
       </div>
     );
   }
@@ -116,56 +132,126 @@ function Bench() {
   );
 }
 
+/** One console entry. Entries never change once written (a growing line is a new object), so memo holds. */
+const ConsoleLine = memo(function ConsoleLine({ l }) {
+  if (l.stream === 'note' || l.stream === 'trimmed') return <div className={'note' + (l.stream === 'trimmed' ? ' trimmed' : '')}>{l.text}</div>;
+  if (l.stream === 'call') return <div className="call"><span className="call-mark" aria-hidden="true" /><b>{l.text}</b></div>;
+  return <span className={l.stream === 'err' ? 'err' : l.stream === 'in' ? 'in' : ''}>{l.text}</span>;
+});
+
+// What was typed into the console, for ↑ and ↓ (shared by the main window and a popped-out dock).
+const typed = [];
+
 function Console() {
   const t = useT();
   const lines = useStore((s) => s.console);
   const benchState = useStore((s) => s.bench.state);
+  const starting = useStore((s) => !!s.bench.starting);
   const [text, setText] = useState('');
+  const [away, setAway] = useState(false);
   const bodyRef = useRef(null);
   const inputRef = useRef(null);
+  const stick = useRef(true);
+  const recall = useRef(-1);
   const waiting = benchState === 'waiting';
 
+  // Follows new output while the reader is at the end; scrolled up to read, it stays put.
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [lines]);
+  // The strip above (program running, waiting …) comes and goes: the end stays in view.
   useEffect(() => {
     const el = bodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [lines]);
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   useEffect(() => {
     if (waiting && inputRef.current) inputRef.current.focus();
   }, [waiting]);
+  const onScroll = () => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    stick.current = atEnd;
+    if (away === atEnd) setAway(!atEnd);
+  };
+  const toEnd = () => {
+    const el = bodyRef.current;
+    stick.current = true;
+    setAway(false);
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  };
+  const onKeyDown = (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    if (!typed.length) return;
+    e.preventDefault();
+    const next = e.key === 'ArrowUp' ? Math.min(typed.length - 1, recall.current + 1) : recall.current - 1;
+    recall.current = Math.max(-1, next);
+    setText(recall.current < 0 ? '' : typed[typed.length - 1 - recall.current]);
+  };
+  const off = benchState === 'off' && !starting;
 
   return (
     <>
-      <div className="dock-body" ref={bodyRef}>
+      <RunStrip />
+      <div className="dock-body rt-console-body" ref={bodyRef} onScroll={onScroll}>
         {lines.length === 0 ? (
           <div className="dock-empty">
             <div className="empty-line">{t('console.empty')}</div>
           </div>
         ) : (
           <pre className="console">
-            {lines.map((l) =>
-              l.stream === 'note' ? (
-                <div key={l.id} className="note">{l.text}</div>
-              ) : l.stream === 'call' ? (
-                <div key={l.id} className="call">{'> '}<b>{l.text}</b></div>
-              ) : (
-                <span key={l.id} className={l.stream === 'err' ? 'err' : l.stream === 'in' ? 'in' : ''}>{l.text}</span>
-              ),
-            )}
+            {lines.map((l) => <ConsoleLine key={l.id} l={l} />)}
           </pre>
         )}
       </div>
+      {away && lines.length > 0 && (
+        <button className="rt-to-end" onClick={toEnd} aria-label={t('runtime.console.toEnd')} title={t('runtime.console.toEnd')}>
+          <Icon name="chevron" />
+        </button>
+      )}
       <form
-        className={'console-input' + (waiting ? ' waiting' : '')}
+        className={'console-input rt-input' + (waiting ? ' waiting' : '')}
         data-tour="console-input"
         onSubmit={(e) => {
           e.preventDefault();
+          if (off) return;
           A.sendInput(text);
+          if (text && typed[typed.length - 1] !== text) typed.push(text);
+          if (typed.length > 50) typed.shift();
+          recall.current = -1;
           setText('');
+          stick.current = true;
         }}
       >
-        <label htmlFor="console-in">{waiting ? t('console.inputWaiting') : t('console.input')}</label>
-        <input id="console-in" ref={inputRef} className="input" value={text} onChange={(e) => setText(e.target.value)} disabled={benchState === 'off'} autoComplete="off" spellCheck="false" />
-        <button className="btn btn-sm" type="submit" disabled={benchState === 'off'}>{t('console.send')}</button>
+        <label htmlFor="console-in" className="rt-sr">{waiting ? t('console.inputWaiting') : t('console.input')}</label>
+        <span className="rt-field">
+          <span className="rt-field-lead"><PromptGlyph waiting={waiting} /></span>
+          <input
+            id="console-in"
+            ref={inputRef}
+            className="rt-field-input"
+            value={text}
+            onChange={(e) => {
+              recall.current = -1;
+              setText(e.target.value);
+            }}
+            onKeyDown={onKeyDown}
+            placeholder={waiting ? t('runtime.console.placeholderWaiting') : t('runtime.console.placeholder')}
+            title={typed.length ? t('runtime.console.history') : undefined}
+            disabled={off}
+            autoComplete="off"
+            spellCheck="false"
+          />
+        </span>
+        <button className="rt-key rt-send" type="submit" disabled={off} aria-label={t('console.send')} title={t('console.send') + ' · Enter'}>
+          <ReturnGlyph />
+        </button>
       </form>
     </>
   );
@@ -264,7 +350,6 @@ export default function Dock() {
   const t = useT();
   const dock = useStore((s) => s.dock);
   const objects = useStore((s) => s.bench.objects);
-  const benchState = useStore((s) => s.bench.state);
   const compile = useStore((s) => s.compile);
   const exception = useStore((s) => s.exception);
   const consoleLines = useStore((s) => s.console.length);
@@ -272,6 +357,7 @@ export default function Dock() {
   const paused = useStore((s) => s.debug && s.debug.paused);
   const recording = useStore((s) => s.recording);
   const collapsed = useStore((s) => s.dockCollapsed);
+  const run = useRunState();
   // Switching to another tab (also automatically: input needed, errors, breakpoint) opens the dock.
   useEffect(() => {
     if (getState().dockCollapsed) setState({ dockCollapsed: false });
@@ -315,10 +401,10 @@ export default function Dock() {
     updateStrip();
   }, [dock, collapsed, objects.length, problemCount, tests.summary, paused]);
   const labels = { objects: t('dock.objects'), console: t('dock.console'), pad: t('dock.pad'), tests: t('dock.tests'), problems: t('dock.problems'), debug: t('dock.debug') };
-  const tab = (id, label, count, bad) => (
+  const tab = (id, label, count, bad, live) => (
     <button className="tab" role="tab" data-tour={'dock:' + id} aria-selected={dock === id && !collapsed} onClick={() => setState({ dock: id, dockCollapsed: false })}>
       <span className="tab-label">{label}</span>
-      {count != null && <span className={'count' + (bad ? ' bad' : '')}>{count}</span>}
+      {count != null && <span className={'count' + (bad ? ' bad' : '') + (live ? ' live' : '')}>{count}</span>}
     </button>
   );
   return (
@@ -326,11 +412,12 @@ export default function Dock() {
       <div className="panel-head">
         <div className="tabs" role="tablist" ref={tabsRef} onScroll={updateStrip}>
           {tab('objects', t('dock.objects'), objects.length || null)}
-          {tab('console', t('dock.console'), null)}
+          {tab('console', t('dock.console'), run.active && dock !== 'console' ? '●' : null)}
           {tab('pad', t('dock.pad'), null)}
           {tab('tests', t('dock.tests'), tests.summary ? `${tests.summary.passed}/${tests.summary.total}` : null, tests.summary && tests.summary.failed > 0)}
           {tab('problems', t('dock.problems'), problemCount || null, problemCount > 0)}
-          {tab('debug', t('dock.debug'), paused ? '●' : null, !!paused)}
+          {/* Paused is no error: the same blue dot as in the title bar. */}
+          {tab('debug', t('dock.debug'), paused ? '●' : null, false, !!paused)}
         </div>
         {hidden.length > 0 && (
           <button
@@ -359,17 +446,18 @@ export default function Dock() {
             <span className="wide-only">{t('lib.short')}</span>
           </button>
         )}
-        {!recording && dock === 'objects' && objects.length > 0 && (
-          <button className="btn btn-sm btn-quiet" onClick={A.stopProgram}>
+        {!recording && dock === 'objects' && objects.length > 0 && !run.canStop && (
+          <button className="btn btn-sm btn-quiet" onClick={() => A.stopProgram()}>
             <Icon name="reset" />
             <span className="wide-only">{t('ws.reset')}</span>
           </button>
         )}
-        {dock === 'console' && consoleLines > 0 && <button className="btn btn-sm btn-quiet" onClick={A.saveConsole}>{t('console.save')}</button>}
-        {dock === 'console' && consoleLines > 0 && <button className="btn btn-sm btn-quiet" onClick={A.clearConsole}>{t('console.clear')}</button>}
-        {(benchState === 'running' || benchState === 'waiting') && dock !== 'debug' && (
-          <button className="btn btn-sm" onClick={A.stopProgram}>
-            <Icon name="stop" />
+        {dock === 'console' && consoleLines > 0 && <button className="btn btn-sm btn-quiet" onClick={() => A.saveConsole()}>{t('console.save')}</button>}
+        {dock === 'console' && consoleLines > 0 && <button className="btn btn-sm btn-quiet" onClick={() => A.clearConsole()}>{t('console.clear')}</button>}
+        {/* The console and the debugger have their own Stop in their strip. */}
+        {run.canStop && dock !== 'debug' && dock !== 'console' && (
+          <button className="btn btn-sm rt-head-stop" data-tour="dock:stop" onClick={() => A.stopProgram()} title={t('runtime.stopTitle')}>
+            <StopGlyph running />
             <span className="wide-only">{t('ws.stop')}</span>
           </button>
         )}

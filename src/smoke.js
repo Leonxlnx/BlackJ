@@ -783,6 +783,11 @@ export async function runSmoke() {
     await until(() => document.querySelector('.build-card[data-status="undone"]'), 3000, 'card not undone');
     A.setTutorMode('hints');
   });
+  // Steps of newer features live in src/smoke-parts/<area>.js:
+  // export default async function ({ step, shot, until, wait, A, api, getState, setState, method, log }) { ... }
+  for (const [, part] of Object.entries(import.meta.glob('./smoke-parts/*.js', { eager: true })).sort(([a], [b]) => a.localeCompare(b))) {
+    await part.default({ step, shot, until, wait, A, api, getState, setState, method, log });
+  }
   await step('home with recent projects', async () => {
     A.go('home');
     await until(() => document.querySelectorAll('.recent-tile').length >= 1);

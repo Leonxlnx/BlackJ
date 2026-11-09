@@ -248,9 +248,17 @@ export default function Tour() {
     pos = chosen || { left: clampX(ring.left + ring.width / 2 - size.w / 2), top: clampY(ring.bottom + gap) };
     if (bar) {
       const below = bar.getBoundingClientRect().bottom;
-      const heads = [...document.querySelectorAll('.panel-head')].map((h) => h.getBoundingClientRect()).filter((r) => r.height && r.top < below + 24);
-      // Under the target and to its left, below the header rows.
-      pos = { left: clampX(ring.right - size.w), top: clampY(Math.max(below, tagBox ? tagBox.bottom : 0, ...heads.map((r) => r.bottom)) + gap) };
+      // Under the target and to its left; left of the side panel when there is room, so the
+      // tutor's mode switch and the chat (often what the tour is about) stay readable.
+      let left = clampX(ring.right - size.w);
+      const side = document.querySelector('.panel.side');
+      const sb = side && side.getBoundingClientRect();
+      if (sb && sb.width && left + size.w > sb.left - 12 && sb.left - 12 - size.w >= 12) left = sb.left - 12 - size.w;
+      // Below the header rows (and the tutor's mode switch) of the panels it lies over.
+      const heads = [...document.querySelectorAll('.panel-head, .tutor-sub')]
+        .map((h) => h.getBoundingClientRect())
+        .filter((r) => r.height && r.top < below + 100 && r.right > left && r.left < left + size.w);
+      pos = { left, top: clampY(Math.max(below, tagBox ? tagBox.bottom : 0, ...heads.map((r) => r.bottom)) + gap) };
     }
   }
 

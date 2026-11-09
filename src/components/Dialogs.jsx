@@ -6,6 +6,7 @@ import { isAssignable, simpleName } from '../model.js';
 import monaco from '../lib/monaco.js';
 import { valueText } from './InspectorPanel.jsx';
 import Icon, { Select } from './Icon.jsx';
+import ToggleRow from './ToggleRow.jsx';
 
 const remembered = new Map();
 // Earlier values per parameter, newest first, offered as suggestions like BlueJ's call history.
@@ -447,10 +448,7 @@ function JarDialog() {
           {mains.map((c) => <option key={c.fileClass} value={c.fileClass}>{c.fileClass}</option>)}
         </Select>
       </div>
-      <label className="check">
-        <input type="checkbox" checked={src} onChange={(e) => setSrc(e.target.checked)} />
-        <span>{t('jar.includeSource')}</span>
-      </label>
+      <ToggleRow checked={src} onChange={setSrc} label={t('jar.includeSource')} />
     </Dialog>
   );
 }

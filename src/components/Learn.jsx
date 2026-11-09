@@ -4,19 +4,28 @@ import { useT } from '../i18n.js';
 import * as A from '../actions.js';
 import { CONCEPTS, GROUPS } from '../lib/glossary.js';
 import { commonErrors } from '../lib/errors.js';
-import monaco from '../lib/monaco.js';
+import monaco, { defineThemes } from '../lib/monaco.js';
 import Icon, { Why } from './Icon.jsx';
 
+let themesReady = false;
 function Code({ code }) {
   const ref = useRef(null);
+  const theme = useStore((s) => s.settings.theme);
   useEffect(() => {
     let alive = true;
+    // The colours come from Monaco's current theme, which only the editor sets: after a theme
+    // switch away from the project the example would keep the other theme's colours.
+    if (!themesReady) {
+      defineThemes();
+      themesReady = true;
+    }
+    monaco.editor.setTheme('blackj-' + theme);
     if (ref.current) ref.current.textContent = code;
     monaco.editor.colorize(code, 'java', { tabSize: 4 }).then((html) => {
       if (alive && ref.current) ref.current.innerHTML = html;
     });
     return () => { alive = false; };
-  }, [code]);
+  }, [code, theme]);
   return (
     <pre className="learn-code">
       <code ref={ref} />

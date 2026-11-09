@@ -4,6 +4,8 @@ import { useT, formatKeys } from '../i18n.js';
 import A from '../panels.js';
 import { valueText } from './InspectorPanel.jsx';
 import Icon from './Icon.jsx';
+import { useRunState, frameLabel } from './RunStrip.jsx';
+import { PauseGlyph, ResumeGlyph, StopGlyph, ArmedGlyph } from './RuntimeGlyphs.jsx';
 
 function VarRow({ v, depth = 0 }) {
   const [open, setOpen] = useState(false);
@@ -38,28 +40,38 @@ export default function DebugPanel() {
   const breakpoints = useStore((s) => s.breakpoints);
   const files = useStore((s) => s.files);
   const paused = debug && debug.paused;
-  const running = useStore((s) => s.bench.state === 'running' || s.bench.state === 'waiting');
+  const armed = debug && debug.armed;
+  const pausing = debug && debug.pausing;
+  const run = useRunState();
+  const noDebug = useStore((s) => !!s.bench.noDebug);
   const count = Object.values(breakpoints || {}).reduce((n, l) => n + l.length, 0);
 
   return (
     <div className="debug">
-      <div className="tests-bar">
-        {!paused && running ? (
-          <button className="btn btn-sm" data-tour="debug:pause" onClick={() => A.debugCommand('pause')}><Icon name="pause" />{t('debug.pause')}</button>
+      <div className="tests-bar rt-debug-bar">
+        {!paused && !armed && (run.canPause || pausing) ? (
+          <button className="btn btn-sm" data-tour="debug:pause" disabled={pausing} onClick={() => A.debugCommand('pause')}><PauseGlyph />{pausing ? t('runtime.status.pausing') : t('debug.pause')}</button>
         ) : (
-          <button className="btn btn-sm" data-tour="debug:resume" disabled={!paused} onClick={() => A.debugCommand('resume')} title="F8"><Icon name="play" />{t('debug.continue')}</button>
+          <button className="btn btn-sm" data-tour="debug:resume" disabled={!paused && !armed} onClick={() => A.debugCommand('resume')} title="F8"><ResumeGlyph />{t('debug.continue')}</button>
         )}
         <button className="btn btn-sm" data-tour="debug:stepOver" disabled={!paused} onClick={() => A.debugCommand('stepOver')} title="F10"><Icon name="stepOver" />{t('debug.over')}</button>
         <button className="btn btn-sm" data-tour="debug:stepInto" disabled={!paused} onClick={() => A.debugCommand('stepInto')} title="F11"><Icon name="stepInto" />{t('debug.into')}</button>
         <button className="btn btn-sm" data-tour="debug:stepOut" disabled={!paused} onClick={() => A.debugCommand('stepOut')} title={formatKeys(lang, 'shift F11', '+')}><Icon name="stepOut" />{t('debug.out')}</button>
-        <button className="btn btn-sm btn-quiet" disabled={!paused && !running} onClick={A.stopProgram}><span className="stop-sq" aria-hidden="true" />{t('ws.stop')}</button>
+        <button className="btn btn-sm btn-quiet" data-tour="debug:stop" disabled={!run.canStop} onClick={() => A.stopProgram()} title={t('runtime.stopTitle')}><StopGlyph running={run.canStop} />{t('ws.stop')}</button>
         <span className="grow" />
         <span className="muted">{count === 1 ? t('debug.bp1') : t('debug.bps', { n: count })}</span>
       </div>
       {!paused ? (
         <div className="dock-body">
           <div className="dock-empty">
-            <div className="empty-line">{count ? t('debug.waiting') : t('debug.empty')}</div>
+            {armed && (
+              <div className="rt-armed" role="status">
+                <ArmedGlyph />
+                <span>{t('runtime.armedHint')}</span>
+              </div>
+            )}
+            {noDebug && <div className="rt-armed rt-armed-off"><span>{t('runtime.noDebug')}</span></div>}
+            {!armed && <div className="empty-line">{count ? t('debug.waiting') : t('debug.empty')}</div>}
             {count > 0 && (
               <div className="bp-list">
                 {Object.entries(breakpoints).flatMap(([file, lines]) => lines.map((l) => (
@@ -75,7 +87,7 @@ export default function DebugPanel() {
             <div className="pad-vars-head"><span>{t('debug.stack')}</span></div>
             {paused.frames.map((f, i) => (
               <button key={i} className={'dbg-frame' + (i === (paused.frame || 0) ? ' sel' : '')} onClick={() => A.debugFrame(i)}>
-                <span>{A.simpleName(f.className)}.{f.method}</span>
+                <span title={`${f.className}.${f.method}`}>{frameLabel(f)}</span>
                 <span className="muted">{t('problems.line', { line: f.line })}</span>
               </button>
             ))}

@@ -1,0 +1,221 @@
+/* Agent area (1.10): the tutor's live plan, tool groups with their own glyphs, screenshots of the
+   program it looked at, checkpoints and the picture viewer. Calm and monochrome; keys and wells
+   take the tactile tokens of styles.css (--key-*, --well-*, --press-shadow). */
+
+.ag-glyph { width: 16px; height: 16px; flex: none; display: block; }
+
+/* ------------------------------------------------------------------ the live plan */
+
+.ag-plan {
+  border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--card-shadow); overflow: hidden;
+  transition: box-shadow var(--t-mid) var(--ease-out);
+}
+/* Pinned while the turn works: it stays in view at the top of the chat. */
+.ag-plan.live { position: sticky; top: -8px; z-index: 3; box-shadow: var(--card-shadow), 0 10px 22px -16px rgba(0, 0, 0, 0.6); }
+.ag-plan-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px 8px 12px; border: 0; background: none;
+  color: var(--text-2); font: inherit; font-size: 12px; line-height: 16px; text-align: left; cursor: pointer;
+}
+.ag-plan.live .ag-plan-head { cursor: default; }
+.ag-plan-head .ag-glyph { width: 15px; height: 15px; color: var(--muted); }
+.ag-plan-title { color: var(--text); font-weight: 500; font-size: 12.5px; }
+.ag-plan-count { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ag-plan-head .ag-chev { width: 12px; height: 12px; color: var(--muted); transition: transform var(--t-mid) var(--ease-out); }
+.ag-plan-head[aria-expanded='false'] .ag-chev { transform: rotate(-90deg); }
+/* A small pressed-in track that fills as items are ticked off. */
+.ag-track {
+  margin-left: auto; width: 44px; height: 5px; border-radius: 3px; flex: none; overflow: hidden;
+  background: var(--well); box-shadow: var(--well-shadow), inset 0 0 0 1px var(--well-edge);
+}
+.ag-track i { display: block; height: 100%; border-radius: 3px; background: var(--text-2); transition: width 200ms var(--ease-out); }
+.ag-plan[data-done='true'] .ag-track i { background: var(--positive); }
+.ag-plan-list { list-style: none; margin: 0; padding: 0 12px 10px; display: flex; flex-direction: column; gap: 3px; }
+.ag-plan-list li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 20px; color: var(--text-2); }
+.ag-plan-list li[data-status='in_progress'] { color: var(--text); font-weight: 500; }
+.ag-plan-list li[data-status='done'] .ag-plan-text { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 55%, transparent); }
+.ag-plan-text { min-width: 0; overflow-wrap: anywhere; }
+.ag-mark { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.ag-mark .ring { fill: none; stroke: var(--control); stroke-width: 1.4; }
+.ag-mark .arc { fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; transform-origin: 8px 8px; animation: ag-spin 1.1s linear infinite; }
+.ag-mark .core { fill: var(--accent); }
+.ag-mark .fill { fill: var(--text-2); }
+.ag-mark .tick { fill: none; stroke: var(--surface); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.ag-mark[data-status='done'] { animation: ag-pop 200ms var(--ease-out); }
+@keyframes ag-pop { from { transform: scale(0.7); opacity: 0.4; } }
+
+/* ------------------------------------------------------------------ tool steps */
+
+.ag-group-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; padding: 3px 8px 3px 4px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--text-2); font: inherit; font-size: 12px; line-height: 16px; text-align: left; cursor: pointer;
+  transition: background-color var(--t-fast), box-shadow var(--t-mid);
+}
+.ag-group-head:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.ag-group-head:active { box-shadow: var(--press-shadow); }
+.ag-group-head:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ag-group-title { color: var(--text); font-weight: 500; white-space: nowrap; }
+.ag-group-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.ag-group-err { flex: none; padding: 0 6px; border-radius: 999px; background: var(--pill-negative-bg); color: var(--pill-negative-ink); font-size: 11px; line-height: 16px; }
+.ag-group-head .ag-chev { width: 12px; height: 12px; margin-left: auto; flex: none; color: var(--muted); transition: transform var(--t-mid) var(--ease-out); }
+.ag-group-head[aria-expanded='false'] .ag-chev { transform: rotate(-90deg); }
+/* The kinds of work in the group, as small overlapping keys. */
+.ag-stack { display: inline-flex; flex: none; padding-left: 2px; }
+.ag-stack .ag-glyph {
+  width: 20px; height: 20px; padding: 3px; margin-left: -6px; border-radius: 7px; color: var(--text-2);
+  background: var(--key-bg); box-shadow: var(--key-shadow), 0 0 0 1px var(--key-edge);
+}
+.ag-stack .ag-glyph:first-child { margin-left: 0; }
+.ag-spinner {
+  width: 11px; height: 11px; flex: none; border-radius: 50%; border: 1.5px solid var(--control); border-top-color: var(--accent);
+  animation: ag-spin 0.9s linear infinite;
+}
+@keyframes ag-spin { to { transform: rotate(360deg); } }
+
+.ag-rows { position: relative; display: flex; flex-direction: column; gap: 1px; }
+/* Inside a group, a hairline joins the rows like a short timeline. */
+.agent-steps[data-collapsible] .ag-rows { padding: 2px 0 2px 4px; }
+.agent-steps[data-collapsible] .ag-rows::before { content: ''; position: absolute; left: 13.5px; top: 10px; bottom: 10px; width: 1px; background: var(--rule); }
+.ag-earlier { align-self: flex-start; margin: 2px 0 2px 32px; font-size: 12px; color: var(--text-2); }
+
+.agent-step { position: relative; min-height: 24px; gap: 8px; }
+.as-mark {
+  position: relative; z-index: 1; width: 20px; height: 20px; flex: none; display: grid; place-items: center; border-radius: 7px;
+  color: var(--muted); background: var(--stage); transition: color var(--t-fast), background-color var(--t-fast);
+}
+.agent-steps[data-collapsible] .as-mark { background: var(--stage); }
+.as-mark .ag-glyph { width: 14px; height: 14px; }
+.agent-step[data-status='done'] .as-mark { color: var(--text-2); }
+.agent-step[data-status='running'] .as-mark, .agent-step[data-status='streaming'] .as-mark {
+  color: var(--text); background: var(--key-bg); box-shadow: var(--key-shadow), 0 0 0 1px var(--key-edge);
+}
+/* A thin arc runs around the step that works right now. */
+.agent-step[data-status='running'] .as-mark::after, .agent-step[data-status='streaming'] .as-mark::after {
+  content: ''; position: absolute; inset: -3px; border-radius: 9px; border: 1.5px solid transparent; border-top-color: var(--accent);
+  animation: ag-spin 1s linear infinite;
+}
+.agent-step[data-status='error'] .as-mark { color: var(--negative); }
+.agent-step[data-status='cancelled'] .as-mark { opacity: 0.5; }
+.agent-step[data-status='cancelled'] .label { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+.agent-step .label { flex: 1; }
+.agent-step.wrap .as-mark { margin-top: -2px; }
+.as-state { flex: none; width: 6px; height: 6px; border-radius: 50%; }
+.agent-step[data-status='error'] .as-state { background: var(--negative); }
+
+.file-chip {
+  display: inline-flex; align-items: center; height: 18px; max-width: 220px; padding: 0 6px; margin: 0 1px; vertical-align: 0;
+  border: 0; border-radius: 6px; background: var(--raised); color: var(--text-2); font: inherit; font-size: 12px; font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--border); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: color var(--t-fast), background-color var(--t-fast), box-shadow var(--t-fast);
+}
+.file-chip:hover:not(:disabled) { color: var(--text); background: var(--raised-2); box-shadow: inset 0 0 0 1px var(--control); }
+.file-chip:active:not(:disabled) { box-shadow: var(--press-shadow); }
+.file-chip:disabled { cursor: default; background: none; box-shadow: none; padding: 0; }
+.file-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* A class or file named in an answer opens it. */
+.md code.md-file {
+  cursor: pointer; color: var(--text); box-shadow: inset 0 0 0 1px var(--border);
+  transition: background-color var(--t-fast), box-shadow var(--t-fast);
+}
+.md code.md-file:hover { background: var(--raised-2); box-shadow: inset 0 0 0 1px var(--control); }
+.md code.md-file:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+/* ------------------------------------------------------------------ screenshots */
+
+.ag-shots { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px 28px; }
+.ag-shot {
+  position: relative; display: block; width: 116px; padding: 0; border: 0; border-radius: 9px; overflow: hidden; cursor: zoom-in;
+  background: var(--inset); box-shadow: 0 0 0 1px var(--border), 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: box-shadow var(--t-fast);
+}
+.ag-shot:hover { box-shadow: 0 0 0 1px var(--control), 0 1px 2px rgba(0, 0, 0, 0.3); }
+.ag-shot:active { box-shadow: 0 0 0 1px var(--control), var(--press-shadow); }
+.ag-shot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ag-shot img { display: block; width: 100%; height: auto; max-height: 88px; object-fit: cover; object-position: top center; }
+.ag-shot-label {
+  position: absolute; left: 5px; bottom: 5px; padding: 1px 6px; border-radius: 5px; font-size: 10.5px; line-height: 15px;
+  color: #f4f4f5; background: rgba(10, 10, 11, 0.7); pointer-events: none;
+}
+
+.ag-lightbox {
+  position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 32px; background: var(--scrim);
+  animation: ag-fade var(--t-mid) var(--ease-out);
+}
+.ag-lightbox-fig {
+  margin: 0; max-width: min(1120px, 94vw); border-radius: 14px; overflow: hidden; background: var(--surface); box-shadow: var(--float-shadow);
+  animation: ag-rise 200ms var(--ease-out);
+}
+.ag-lightbox-img { display: grid; place-items: center; padding: 12px; background: var(--inset); }
+.ag-lightbox-img img { display: block; max-width: 100%; max-height: 72vh; border-radius: 6px; box-shadow: 0 0 0 1px var(--border); }
+.ag-lightbox figcaption { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; font-size: 12px; line-height: 16px; color: var(--muted); }
+.ag-lightbox figcaption > .ag-glyph { width: 15px; height: 15px; }
+.ag-lb-title { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.ag-lb-meta { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ag-lightbox .grow { flex: 1; }
+.ag-lb-nav { display: inline-flex; align-items: center; gap: 6px; }
+.ag-lb-count { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ag-key {
+  width: 26px; height: 26px; flex: none; display: grid; place-items: center; border: 0; border-radius: 8px; cursor: pointer; color: var(--text-2);
+  background: var(--key-bg); box-shadow: var(--key-shadow), 0 0 0 1px var(--key-edge); transition: color var(--t-fast), background-color var(--t-fast);
+}
+.ag-key:hover:not(:disabled) { color: var(--text); background: var(--key-bg-hover); }
+.ag-key:active:not(:disabled) { background: var(--key-press); box-shadow: var(--press-shadow), 0 0 0 1px var(--key-edge); }
+.ag-key:disabled { opacity: 0.4; cursor: default; }
+.ag-key:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.ag-key svg { width: 14px; height: 14px; }
+.ag-key svg.left { transform: rotate(90deg); }
+.ag-key svg.right { transform: rotate(-90deg); }
+@keyframes ag-fade { from { opacity: 0; } }
+@keyframes ag-rise { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
+
+/* What a build made, as a picture on top of its card. */
+.build-shot { display: block; width: 100%; padding: 10px 10px 2px; border: 0; background: none; cursor: zoom-in; text-align: left; font: inherit; }
+.build-shot img {
+  display: block; width: 100%; max-height: 240px; object-fit: contain; border-radius: 8px; background: var(--stage);
+  box-shadow: 0 0 0 1px var(--border); transition: box-shadow var(--t-fast);
+}
+.build-shot:hover img { box-shadow: 0 0 0 1px var(--control); }
+.build-shot:focus-visible { outline: none; }
+.build-shot:focus-visible img { box-shadow: 0 0 0 2px var(--focus); }
+.build-shot-cap { display: flex; align-items: center; gap: 6px; padding: 6px 2px 0; font-size: 12px; line-height: 16px; color: var(--muted); }
+.build-shot-cap .ag-glyph { width: 14px; height: 14px; }
+.build-shot-cap .grow { flex: 1; }
+
+/* ------------------------------------------------------------------ checkpoints */
+
+.ag-cp { margin-top: 4px; display: flex; justify-content: flex-end; }
+.ag-cp-btn {
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px 0 6px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--muted); font: inherit; font-size: 11.5px; cursor: pointer; opacity: 0.7;
+  transition: opacity var(--t-fast), color var(--t-fast), background-color var(--t-fast);
+}
+.msg-user:hover .ag-cp-btn, .ag-cp-btn:focus-visible { opacity: 1; }
+.ag-cp-btn:hover:not(:disabled) { color: var(--text-2); background: var(--raised); }
+.ag-cp-btn:active:not(:disabled) { box-shadow: var(--press-shadow); }
+.ag-cp-btn:disabled { cursor: default; opacity: 0.35; }
+.ag-cp-btn .ag-glyph { width: 13px; height: 13px; }
+.ag-cp.open { margin-top: 8px; }
+.ag-cp-card {
+  display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 4px 10px; width: 300px; max-width: 100%; padding: 12px; border-radius: 12px;
+  background: var(--surface); box-shadow: var(--card-shadow); animation: ag-rise var(--t-mid) var(--ease-out);
+}
+.ag-cp-card > .ag-glyph { color: var(--text-2); margin-top: 1px; }
+.ag-cp-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; line-height: 16px; color: var(--muted); }
+.ag-cp-text b { color: var(--text); font-weight: 500; font-size: 13px; line-height: 18px; }
+.ag-cp-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+
+/* ------------------------------------------------------------------ turn footer, live status, composer */
+
+.ag-foot { font-variant-numeric: tabular-nums; }
+.ag-retry { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ag-key[aria-pressed='true'] { background: var(--key-press); box-shadow: var(--press-shadow), 0 0 0 1px var(--key-edge); color: var(--text); }
+.live-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%; }
+.live-status[data-stopping] .live-dot { animation: none; background: var(--muted); }
+.send-btn.stop[data-stopping] { opacity: 0.5; cursor: default; }
+.composer-hint { margin-left: auto; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ag-mark .arc, .ag-spinner, .agent-step .as-mark::after { animation: none; }
+  .ag-lightbox, .ag-lightbox-fig, .ag-cp-card, .ag-mark[data-status='done'] { animation: none; }
+  .ag-track i, .ag-chev { transition: none; }
+}

@@ -4,15 +4,16 @@ import { useT } from '../i18n.js';
 import * as A from '../actions.js';
 import { api } from '../api.js';
 import Icon, { Select } from './Icon.jsx';
+import ModelPicker from './ModelPicker.jsx';
 import { JdkInstall } from './Home.jsx';
 
 function Switch({ checked, onChange, label }) {
   return <button className="switch" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} />;
 }
 
-function Row({ title, desc, children, stack, tour }) {
+function Row({ title, desc, children, stack, wide, tour }) {
   return (
-    <div className={'set-row' + (stack ? ' stack' : '')} data-tour={tour ? 'settings:' + tour : undefined}>
+    <div className={'set-row' + (stack ? ' stack' : '') + (wide ? ' wide' : '')} data-tour={tour ? 'settings:' + tour : undefined}>
       <div>
         <div className="title">{title}</div>
         {desc && <div className="desc">{desc}</div>}
@@ -22,10 +23,11 @@ function Row({ title, desc, children, stack, tour }) {
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, icon, children }) {
   return (
     <section className="set-section">
       <div className="set-label">
+        {icon && <span className="set-ico" aria-hidden="true"><Icon name={icon} /></span>}
         <h2>{title}</h2>
       </div>
       <div className="card set-panel">{children}</div>
@@ -71,7 +73,7 @@ export default function Settings() {
           </div>
         </div>
 
-        <Section title={t('settings.look')}>
+        <Section title={t('settings.look')} icon="sun">
           <Row title={t('settings.lang')} tour="lang">
             <Select value={s.lang} onChange={(v) => set({ lang: v })} aria-label={t('settings.lang')}>
               <option value="de">Deutsch</option>
@@ -81,7 +83,10 @@ export default function Settings() {
           <Row title={t('settings.theme')} tour="theme">
             <div className="seg">
               {['dark', 'light'].map((v) => (
-                <button key={v} aria-pressed={s.theme === v} onClick={() => set({ theme: v })}>{t('settings.theme.' + v)}</button>
+                <button key={v} aria-pressed={s.theme === v} onClick={() => set({ theme: v })}>
+                  <Icon name={v === 'dark' ? 'moon' : 'sun'} />
+                  {t('settings.theme.' + v)}
+                </button>
               ))}
             </div>
           </Row>
@@ -94,7 +99,7 @@ export default function Settings() {
           </Row>
         </Section>
 
-        <Section title={t('settings.editor')}>
+        <Section title={t('settings.editor')} icon="code">
           <Row title={t('settings.hoverHelp')}>
             <Switch checked={s.hoverHelp} onChange={(v) => set({ hoverHelp: v })} label={t('settings.hoverHelp')} />
           </Row>
@@ -117,7 +122,7 @@ export default function Settings() {
           )}
         </Section>
 
-        <Section title={t('settings.java')}>
+        <Section title={t('settings.java')} icon="cup">
           <Row tour="java" title={t('settings.javaCurrent')} desc={info.jdk ? `Java ${info.jdk.version} · ${info.jdk.source}` : t('home.javaMissing')}>
             <div className="action-row">
               {s.jdkPath && <button className="btn btn-sm btn-quiet" onClick={autoJdk}>{t('settings.javaAuto')}</button>}
@@ -142,7 +147,7 @@ export default function Settings() {
           </Row>
         </Section>
 
-        <Section title={t('settings.tutor')}>
+        <Section title={t('settings.tutor')} icon="tutor">
           <Row title={t('settings.aiOff')} desc={t('settings.aiOffText')}>
             <Switch checked={!!s.aiOff} onChange={(v) => set({ aiOff: v })} label={t('settings.aiOff')} />
           </Row>
@@ -178,15 +183,16 @@ export default function Settings() {
                   <Switch checked={s.rememberKey} onChange={(v) => set({ rememberKey: v })} label={t('tutor.keyRemember')} />
                 </Row>
               )}
-              <Row tour="model" title={t('settings.model')} desc={(() => { const m = tutor.models.find((x) => x.id === s.model); return m ? t('settings.modelPrice', { input: m.input, output: m.output }) : ''; })()}>
-                <Select value={s.model} onChange={(v) => set({ model: v })} aria-label={t('settings.model')}>
-                  {tutor.models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-                </Select>
+              <Row tour="model" title={t('settings.model')} wide>
+                <ModelPicker value={s.model} onChange={(v) => set({ model: v })} models={tutor.models} showPrices={!!s.showCosts} />
               </Row>
               <Row title={t('settings.mode')}>
                 <div className="seg">
                   {['hints', 'explain', 'build'].map((v) => (
-                    <button key={v} aria-pressed={s.tutorMode === v} onClick={() => set({ tutorMode: v })}>{t('tutor.mode.' + v)}</button>
+                    <button key={v} aria-pressed={s.tutorMode === v} onClick={() => set({ tutorMode: v })}>
+                      <Icon name={{ hints: 'bulb', explain: 'explain', build: 'blocks' }[v]} />
+                      {t('tutor.mode.' + v)}
+                    </button>
                   ))}
                 </div>
               </Row>
@@ -203,7 +209,7 @@ export default function Settings() {
           )}
         </Section>
 
-        <Section title={t('settings.about')}>
+        <Section title={t('settings.about')} icon="info">
           <Row title={`BlackJ ${info.version}`} desc={t('settings.aboutText')}>
             <button className="btn btn-sm btn-quiet" onClick={() => api.openExternal('https://www.bluej.org')}>
               bluej.org

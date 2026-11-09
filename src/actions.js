@@ -21,7 +21,11 @@ export async function init() {
   applyLook(info.settings);
   api.bench.onOut(onBenchOut);
   api.bench.onState(onBenchState);
-  if (api.bench.onWindow) api.bench.onWindow((w) => note(w.title ? t('console.window', { title: w.title }) : t('console.windowUntitled')));
+  if (api.bench.onWindow) api.bench.onWindow((w) => {
+    // The tutor's out-of-sight runs open windows the student never sees: no note for those.
+    if (!quietProgram) note(w.title ? t('console.window', { title: w.title }) : t('console.windowUntitled'));
+  });
+  if (api.bench.onProgram) api.bench.onProgram(onBenchProgram);
   api.ai.onEvent(onAiEvent);
   Agent.init();
   if (api.debug) api.debug.onEvent(onDebugEvent);
@@ -237,7 +241,7 @@ export async function printFile(name) {
 /** Saves what the console shows to a text file (BlueJ: Terminal > Save to file). */
 export async function saveConsole() {
   const s = getState();
-  const text = s.console.map((l) => (l.stream === 'call' ? `> ${l.text}\n` : l.stream === 'note' ? `# ${l.text}\n` : l.text)).join('');
+  const text = s.console.map((l) => (l.stream === 'call' ? `> ${l.text}\n` : l.stream === 'note' || l.stream === 'trimmed' ? `# ${l.text}\n` : l.text)).join('');
   const r = await api.saveText({ text, name: `${s.project ? s.project.name : 'BlackJ'} – ${t('dock.console')}.txt` });
   if (r.ok) toast(t('console.saved', { file: r.result.file }));
   else if (r.error.code !== 'canceled') toast(errorText(r.error), 'bad');
@@ -262,8 +266,10 @@ export function closeProject() {
   for (const p of getState().layout.detached) dockBack(p);
   endTour('closed');
   newChat();
-  api.bench.reset();
-  setState({ project: null, files: {}, view: 'home', tabs: [], activeTab: null, bench: { state: 'off', objects: [], java: null } });
+  // The program ends with the project: its windows close, and no JVM starts again.
+  if (api.bench.stop) api.bench.stop();
+  else api.bench.reset();
+  setState({ project: null, files: {}, view: 'home', tabs: [], activeTab: null, bench: { state: 'off', objects: [], java: null, live: null } });
 }
 
 export function enterPackage(pkg) {
@@ -564,44 +570,161 @@ export function anyStale() {
   return Object.keys(getState().files).some((n) => isStale(n));
 }
 
+/**
+ * Why ensureCompiled() said no: 'compile' (errors, or javac did not run) or 'bench' (the code
+ * compiled, but the JVM did not start).
+ */
+export function notReadyReason() {
+  return getState().compile.state === 'ok' && !anyStale() ? 'bench' : 'compile';
+}
+
 export async function ensureCompiled() {
   if (getState().compile.state !== 'ok' || anyStale()) {
     await compile();
     if (getState().compile.state !== 'ok') return false;
   }
-  await waitFor(() => getState().bench.state !== 'off', 8000);
+  // A JVM that (re)starts slowly on a busy school PC is waited for; one that cannot start is not.
+  await waitFor(() => {
+    const b = getState().bench;
+    return b.state !== 'off' || (!b.starting && !!b.error);
+  }, 45000);
   return getState().bench.state !== 'off';
 }
 
 // ------------------------------------------------------------------ object bench
 
+/** The program after its call returned: open windows and its own threads, or null when nothing lives on. */
+const liveOf = (ev) => ((ev.windows && ev.windows.length) || ev.threads ? { windows: ev.windows || [], threads: ev.threads || 0 } : null);
+
+/**
+ * Where the program that lives on came from: 'main' (a main program, run and stopped as a whole)
+ * or 'bench' (a window or thread an object on the bench opened, such as a Leinwand: the objects
+ * stay, main still runs in the same JVM). An older bench does not say: then it is main.
+ */
+function liveFromOf(prev, live, cmd) {
+  if (!live) return null;
+  if (prev.live && prev.liveFrom === 'main') return 'main';
+  if (cmd && cmd !== 'main') return 'bench';
+  // main() ran, but left only what the bench objects had open already.
+  if (cmd === 'main' && prev.live && prev.liveFrom === 'bench' && JSON.stringify(prev.live) === JSON.stringify(live)) return 'bench';
+  return 'main';
+}
+
+/** The tutor's out-of-sight run: its windows get no notes and the console is not cleared for it. */
+let quietProgram = false;
+
+/** Why the bench JVM did not start, in the student's language. */
+export function benchReasonText(reason) {
+  if (!reason) return '';
+  const key = 'runtime.reason.' + (reason.code || 'unknown');
+  const text = t(key);
+  const base = text === key ? t('runtime.reason.unknown') : text;
+  return reason.detail && !['crashLoop'].includes(reason.code) ? `${base} (${reason.detail})` : base;
+}
+
 function onBenchState(ev) {
+  // Output and the state change it belongs to arrive together, the output first.
+  if (ev.out && ev.out.length) onBenchOut(ev.out);
   if (['ready', 'stopped', 'exit'].includes(ev.state)) fixtureLog = [];
+  const before = getState().bench;
   setState((s) => {
     const bench = { ...s.bench };
-    if (ev.state === 'ready') Object.assign(bench, { state: 'ready', objects: [], java: ev.java });
-    else if (ev.state === 'running') bench.state = 'running';
-    else if (ev.state === 'idle') bench.state = 'ready';
+    // busy: a call (new, method, main, code pad) runs; state 'waiting' can also come from a thread
+    // that lives on after its call returned.
+    if (ev.state === 'starting') bench.starting = true;
+    else if (ev.state === 'ready') Object.assign(bench, { state: 'ready', busy: false, objects: [], java: ev.java, live: null, starting: false, error: null, noDebug: ev.debug === false });
+    else if (ev.state === 'running') Object.assign(bench, { state: 'running', busy: true, lastCmd: ev.cmd || 'main' });
+    else if (ev.state === 'idle') {
+      const live = liveOf(ev);
+      Object.assign(bench, { state: 'ready', busy: false, live, liveFrom: liveFromOf(s.bench, live, ev.cmd), lastCmd: ev.cmd || 'main', windowPending: !!ev.pending });
+    }
     else if (ev.state === 'waiting') bench.state = 'waiting';
-    else if (ev.state === 'stopped' || ev.state === 'exit') Object.assign(bench, { state: 'off', objects: [] });
+    else if (ev.state === 'stopped' || ev.state === 'exit') Object.assign(bench, { state: 'off', busy: false, objects: [], live: null, starting: false });
+    else if (ev.state === 'failed') Object.assign(bench, { state: 'off', busy: false, objects: [], live: null, starting: false, error: ev.reason || { code: 'unknown' } });
     const patch = { bench, dock: ev.state === 'waiting' ? 'console' : s.dock };
-    if (ev.state === 'ready' || ev.state === 'exit') Object.assign(patch, { inspect: null, pad: { ...s.pad, vars: [] }, debug: { ...s.debug, paused: null } });
+    if (['ready', 'exit', 'stopped', 'failed'].includes(ev.state)) Object.assign(patch, { inspect: null, pad: { ...s.pad, vars: [] }, debug: { ...s.debug, paused: null, armed: false, pausing: false } });
     return patch;
   });
-  if (ev.state === 'exit') note(t('console.exit', { code: ev.code ?? '?' }));
+  if (['ready', 'exit', 'stopped', 'failed'].includes(ev.state)) quietProgram = false;
+  if (ev.state === 'exit') {
+    if (ev.systemExit) note(t('runtime.systemExit', { code: ev.code ?? 0 }));
+    else note(t('runtime.crashed', { code: ev.code ?? '?' }) + (ev.reason && ev.reason.detail ? ' ' + ev.reason.detail : ''));
+  }
+  if (ev.state === 'failed' && !(before.error && before.error.code === (ev.reason && ev.reason.code))) {
+    const text = t('runtime.startFailed', { reason: benchReasonText(ev.reason) });
+    note(text);
+    toast(text, 'bad');
+  }
   if (ev.state === 'ready') syncBreakpoints();
 }
+
+/** Windows and threads of the program changed while it lives on (a window closed, a thread ended). */
+function onBenchProgram(ev) {
+  const before = getState().bench;
+  const was = before.live;
+  const live = liveOf(ev);
+  if (JSON.stringify(was) === JSON.stringify(live)) return;
+  // A window that came after its call returned (the bench said "pending") belongs to that call.
+  const liveFrom = !live ? null : was ? before.liveFrom : before.lastCmd && before.lastCmd !== 'main' ? 'bench' : 'main';
+  setState((s) => ({ bench: { ...s.bench, live, liveFrom, windowPending: false } }));
+  const ended = was && !live;
+  if (ended && !ev.busy && before.liveFrom !== 'bench' && !quietProgram && getState().bench.state !== 'off') note(was.windows.length ? t('runtime.endedWindows') : t('runtime.ended'));
+  if (ended) {
+    quietProgram = false;
+    // "Anhalten" on a program that waited: it ended by itself, so nothing is left to pause. Without
+    // this the next call (main again, a method on the bench) would stop at its first line.
+    if (getState().debug.armed && api.debug) {
+      setState((s) => ({ debug: { ...s.debug, armed: false } }));
+      api.debug.resume().catch(() => {});
+    }
+  }
+}
+
+// The console keeps the newest output: at most this many characters (a program that prints
+// without end stays fast), older lines give way with a note at the top.
+const CONSOLE_CHARS = 300000;
+const CONSOLE_LINES = 2500;
 
 function onBenchOut(chunks) {
   setState((s) => {
     const console = s.console.slice();
     for (const c of chunks) {
+      if (c.stream === 'skip') {
+        console.push({ stream: 'note', text: t('runtime.skipped', { n: c.n.toLocaleString(s.settings.lang === 'en' ? 'en' : 'de') }), id: uid() });
+        continue;
+      }
       const last = console[console.length - 1];
-      if (last && last.stream === c.stream && !last.text.endsWith('\n')) console[console.length - 1] = { ...last, text: last.text + c.text };
+      if (last && last.stream === c.stream && !last.text.endsWith('\n') && last.text.length < 20000) console[console.length - 1] = { ...last, text: last.text + c.text };
       else console.push({ stream: c.stream, text: c.text, id: uid() });
     }
-    return { console: console.length > 4000 ? console.slice(-3000) : console, dock: s.dock === 'objects' && s.bench.state === 'running' ? 'console' : s.dock };
+    return { console: trimConsole(console), dock: s.dock === 'objects' && s.bench.state === 'running' ? 'console' : s.dock };
   });
+}
+
+function trimConsole(lines) {
+  let total = 0;
+  let from = lines.length;
+  while (from > 0 && total + lines[from - 1].text.length <= CONSOLE_CHARS && lines.length - from < CONSOLE_LINES) {
+    total += lines[from - 1].text.length;
+    from--;
+  }
+  if (from === 0) return lines;
+  const kept = lines.slice(from);
+  // The kept part starts mid-line ("178571" of "Zeile 178571"): it starts at the next full line.
+  if (kept.length && from > 0 && lines[from - 1].stream === kept[0].stream && !lines[from - 1].text.endsWith('\n')) {
+    const nl = kept[0].text.indexOf('\n');
+    if (nl < 0 || nl === kept[0].text.length - 1) kept.shift();
+    else kept[0] = { ...kept[0], text: kept[0].text.slice(nl + 1) };
+  }
+  // A single huge chunk keeps its end.
+  if (!kept.length) {
+    const last = lines[lines.length - 1];
+    const tail = last.text.slice(-CONSOLE_CHARS);
+    const nl = tail.indexOf('\n');
+    kept.push({ ...last, text: nl >= 0 && nl < tail.length - 1 ? tail.slice(nl + 1) : tail });
+  }
+  if (kept[0].stream !== 'trimmed') kept.unshift({ stream: 'trimmed', text: t('runtime.trimmed'), id: uid() });
+  return kept;
 }
 
 export function note(text) {
@@ -717,10 +840,23 @@ export async function callMethod({ target, cls, method, args, quiet = false }) {
  * Runs a class's main method. For the tutor: `input` lines are typed into the console each time the
  * program waits (a wait with no line left stops it), and `timeoutMs` stops a program that runs on.
  */
-export async function runMain(cls, { input = null, timeoutMs = 0, args = [] } = {}) {
-  if (!(await ensureCompiled())) return { compileFailed: true };
+export async function runMain(cls, { input = null, timeoutMs = 0, args = [], quiet = false, onStart = null } = {}) {
+  // The console comes first, before anything is awaited: whatever the caller shows next stays.
   setState({ dock: 'console', menu: null, palette: null });
-  if (getState().settings.clearConsoleOnCall) clearConsole();
+  // The student's own run: its windows show, also when a tutor's look was left on or is in progress.
+  if (!quiet) {
+    Agent.releaseProgram();
+    await setProgramOffscreen(false);
+  }
+  if (!(await ensureCompiled())) return notReadyReason() === 'bench' ? { benchFailed: getState().bench.error || { code: 'unknown' } } : { compileFailed: true };
+  // A main program that still runs is started again, not twice. Windows that objects on the bench
+  // opened stay, and so do the objects: main runs in the same JVM.
+  if (getState().bench.live && getState().bench.liveFrom !== 'bench') {
+    await stopProgram({ quiet: true });
+    note(t('runtime.restarted'));
+  }
+  quietProgram = quiet;
+  if (getState().settings.clearConsoleOnCall && !quiet) clearConsole();
   logCall(`${simpleName(cls)}.main(${args.length ? `new String[]{${args.map((a) => JSON.stringify(a)).join(', ')}}` : 'new String[0]'})`);
   await breakpointsReady();
   const out = { finished: false, timedOut: false, waitingForInput: false };
@@ -742,6 +878,7 @@ export async function runMain(cls, { input = null, timeoutMs = 0, args = [] } = 
     });
   }
   if (timeoutMs) timer = setTimeout(() => { out.timedOut = true; stopProgram(); }, timeoutMs);
+  if (onStart) onStart();
   const r = await api.bench.main({ className: cls, args });
   clearTimeout(timer);
   if (unsubscribe) unsubscribe();
@@ -753,10 +890,26 @@ export async function runMain(cls, { input = null, timeoutMs = 0, args = [] } = 
       toast(errorText(r.error), 'bad');
       out.error = errorText(r.error);
     }
+    if (!getState().bench.live) quietProgram = false;
     return out;
   }
   setState((st) => ({ bench: { ...st.bench, objects: r.result.bench } }));
   out.finished = true;
+  // The end of the call (state "idle" with the program's windows) is a message of its own, and
+  // Electron does not keep it in order with this answer: it can arrive a moment later.
+  if (getState().bench.busy) await waitFor(() => !getState().bench.busy, 1500);
+  // The program's event thread had not caught up when main() returned (the bench says "pending"):
+  // its window may still come, and the bench reports it when it does.
+  if (!getState().bench.live && getState().bench.windowPending) await waitFor(() => getState().bench.live || !getState().bench.windowPending, 4000);
+  // main() returned, but its windows (or threads) keep the program running.
+  // Windows that only bench objects keep open are not this program's.
+  const live = getState().bench.liveFrom === 'bench' ? null : getState().bench.live;
+  if (!live) quietProgram = false;
+  if (live) {
+    out.stillRunning = true;
+    out.windows = live.windows.map((w) => w.title || '');
+    if (live.threads) out.threads = live.threads;
+  }
   return out;
 }
 
@@ -769,15 +922,85 @@ function waitFor(cond, ms) {
 }
 
 export async function sendInput(text) {
-  setState((s) => ({ console: [...s.console, { stream: 'in', text: text + '\n', id: uid() }], bench: { ...s.bench, state: s.bench.state === 'waiting' ? 'running' : s.bench.state } }));
+  // Input for a thread that lives on after its call returned: the bench is free again afterwards.
+  setState((s) => ({ console: [...s.console, { stream: 'in', text: text + '\n', id: uid() }], bench: { ...s.bench, state: s.bench.state === 'waiting' ? (s.bench.busy === false ? 'ready' : 'running') : s.bench.state } }));
   await api.bench.stdin({ text: text + '\n' });
 }
 
-export async function stopProgram() {
-  if (getState().debug.attached && api.debug) api.debug.detach();
-  await api.bench.reset();
-  note(t('console.stopped') + ' ' + t('console.reset'));
-  setState((s) => ({ bench: { ...s.bench, objects: [] }, inspect: null, debug: { ...s.debug, paused: null } }));
+/**
+ * Stop: ends the program however it runs (a loop, waiting for input, a window with a timer,
+ * paused in the debugger) by starting a fresh JVM. Its windows close, the bench is empty.
+ */
+let stopping = null;
+export function stopProgram({ quiet = false } = {}) {
+  if (stopping) return stopping;
+  setState((s) => ({ bench: { ...s.bench, stopping: true } }));
+  stopping = (async () => {
+    const r = await api.bench.reset();
+    setState((s) => ({ bench: { ...s.bench, objects: [], live: null, stopping: false }, inspect: null, debug: { ...s.debug, paused: null, armed: false, pausing: false } }));
+    if (!quiet) note(t('console.stopped') + ' ' + t('console.reset'));
+    return !!(r && r.ok);
+  })().finally(() => { stopping = null; });
+  return stopping;
+}
+
+/**
+ * A fresh JVM without a word in the console or the run strip, for the end of the tutor's
+ * out-of-sight run: a Swing timer of a game ticks on after its window closed (its thread is a
+ * daemon, so the program counts as ended). Only when the bench holds nothing to lose.
+ */
+export async function recycleBench() {
+  if (stopping) return stopping;
+  const s = getState();
+  if (s.bench.state === 'off' || s.bench.objects.length || (s.pad.vars || []).length || s.debug.paused) return false;
+  setState((st) => ({ bench: { ...st.bench, recycling: true } }));
+  try {
+    const r = await api.bench.reset();
+    return !!(r && r.ok);
+  } finally {
+    setState((st) => ({ bench: { ...st.bench, recycling: false } }));
+  }
+}
+
+// ------------------------------------------------------------------ the program's windows (for the tutor)
+
+/** The program's open windows: [{ id, title, width, height, focused }] (none while no program runs). */
+export async function programWindows() {
+  const r = await api.bench.windows();
+  return r.ok ? r.result.windows || [] : [];
+}
+
+/**
+ * One window of the program rendered off-screen (also when it is out of sight):
+ * { id, title, width, height, png } with png as base64. opts: { id?, maxWidth? (1024) }.
+ * Without a window: { error, code: 'noWindow' }.
+ */
+export async function captureWindow(opts = {}) {
+  const r = await api.bench.capture(opts || {});
+  return r.ok ? r.result : { error: errorText(r.error), code: r.error.code };
+}
+
+/**
+ * Keys, text, clicks and pauses for a window of the program, as AWT events (the real mouse and
+ * keyboard are never used). opts: { id?, events: [{ type: 'key', key, action?, holdMs? },
+ * { type: 'type', text }, { type: 'click', x, y, button? }, { type: 'move', x, y }, { type: 'wait', ms }] }.
+ * Coordinates are content pixels at capture scale 1. Resolves with { delivered } or { error, code }.
+ */
+export async function sendProgramInput(opts = {}) {
+  const r = await api.bench.input(opts || {});
+  return r.ok ? r.result : { error: errorText(r.error), code: r.error.code };
+}
+
+/** Closes every window of the program (dispose, not System.exit): { closed }. */
+export async function closeProgramWindows() {
+  const r = await api.bench.closeWindows();
+  return r.ok ? r.result : { error: errorText(r.error), code: r.error.code };
+}
+
+/** While on, new windows of the program open out of sight (-4000,-4000) and never come to the front. */
+export async function setProgramOffscreen(on) {
+  const r = await api.bench.offscreen({ on: !!on });
+  return !!(r && r.ok);
 }
 
 export async function inspect(ref) {
@@ -1133,17 +1356,34 @@ const breakpointsReady = () => Promise.race([bpSync, new Promise((r) => setTimeo
 function onDebugEvent(ev) {
   if (ev.event === 'paused') {
     // The call that hit the breakpoint is still running: get its dialog out of the way of the code.
-    setState((s) => ({ debug: { ...s.debug, attached: true, paused: { ...ev, frame: 0 } }, dock: 'debug', dialog: s.dialog && s.dialog.type === 'call' ? null : s.dialog }));
+    setState((s) => ({ debug: { ...s.debug, attached: true, paused: { ...ev, frame: 0 }, armed: false, pausing: false }, dock: 'debug', dockCollapsed: false, dialog: s.dialog && s.dialog.type === 'call' ? null : s.dialog }));
     const f = ev.frames && ev.frames[0];
     if (f) openClass(f.className, f.line);
-  } else if (ev.event === 'resumed') setState((s) => ({ debug: { ...s.debug, paused: null } }));
+  } else if (ev.event === 'resumed') setState((s) => ({ debug: { ...s.debug, paused: null, armed: ev.reason === 'disarm' ? false : s.debug.armed } }));
   else if (ev.event === 'attached') setState((s) => ({ debug: { ...s.debug, attached: true } }));
-  else if (ev.event === 'vmDeath' || ev.event === 'detached') setState((s) => ({ debug: { attached: false, paused: null } }));
+  else if (ev.event === 'vmDeath' || ev.event === 'detached') setState((s) => ({ debug: { attached: false, paused: null, armed: false, pausing: false } }));
 }
 
 export function debugCommand(cmd) {
-  if (!api.debug) return;
-  api.debug[cmd]();
+  if (!api.debug) return undefined;
+  if (cmd === 'pause') return pauseProgram();
+  return api.debug[cmd]();
+}
+
+/**
+ * Pause ("Anhalten"): stops the program where its code runs right now, a loop, a thread or a
+ * window's event code. A window program that only waits (for a click, a key, its timer) stops
+ * as soon as its code runs again; until then debug.armed is true and "Continue" cancels.
+ */
+export async function pauseProgram() {
+  if (!api.debug) return null;
+  setState((s) => ({ debug: { ...s.debug, pausing: true } }));
+  const r = await api.debug.pause();
+  const res = r && r.ok ? r.result : null;
+  setState((s) => ({ debug: { ...s.debug, pausing: false, armed: !!(res && res.armed && !s.debug.paused) } }));
+  if (!r || !r.ok) toast(r && r.error && r.error.code === 'noDebugAgent' ? t('runtime.noDebugAgent') : t('runtime.pauseFailed'), 'bad');
+  else if (res && !res.paused && !res.armed) toast(t('runtime.nothingToPause'));
+  return res;
 }
 
 export async function debugFrame(index) {
@@ -1352,7 +1592,7 @@ export async function sendAfterStop(text) {
   if (!getState().chat.busy) await askTutor(text);
 }
 
-export { acceptProposal, rejectProposal, undoChange, undoTurn } from './agent.js';
+export { acceptProposal, rejectProposal, undoChange, undoTurn, restoreCheckpoint, checkpointPreview } from './agent.js';
 
 export async function retryLast() {
   const turns = getState().chat.turns;

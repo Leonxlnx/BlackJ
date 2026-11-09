@@ -12,3 +12,4 @@ Projekte/
 resources/junit/*.jar
 .claude/
 release/
+dist-*/

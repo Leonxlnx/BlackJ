@@ -1,0 +1,100 @@
+/* The class diagram: UML relations, the canvas, its tools. Builds on the tokens in styles.css. */
+
+:root,
+:root[data-theme='dark'] {
+  --rel-ink: #6b6b73;
+  --rel-soft: #5a5a62;
+  --rel-strong: #d4d4d8;
+  --rel-dot: rgba(255, 255, 255, 0.075);
+  --card-lift: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme='light'] {
+  --rel-ink: #8c8c95;
+  --rel-soft: #a2a2aa;
+  --rel-strong: #26262b;
+  --rel-dot: rgba(10, 10, 11, 0.11);
+  --card-lift: 0 1px 2px rgba(10, 10, 11, 0.05), 0 0 0 0.5px rgba(10, 10, 11, 0.02);
+}
+
+/* ------------------------------------------------------------------ canvas */
+
+/* A calm dot grid instead of lines; it moves and scales with the diagram (Diagram.jsx). */
+.diagram {
+  background-image: radial-gradient(circle at 1px 1px, var(--rel-dot) 1px, transparent 1.5px);
+  outline: none; user-select: none; touch-action: none;
+}
+.diagram.exporting { background-image: none; }
+.diagram.space, .diagram.space * { cursor: grab !important; }
+.diagram.panning, .diagram.panning *, html.diagram-panning, html.diagram-panning * { cursor: grabbing !important; }
+html.diagram-panning, html.diagram-panning *, html.diagram-banding, html.diagram-banding * { user-select: none !important; }
+html.diagram-banding .diagram, html.diagram-banding .diagram * { cursor: crosshair !important; }
+
+/* The rectangle that picks several cards (Shift+drag). */
+.band {
+  position: absolute; z-index: 4; pointer-events: none; border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.diagram.exporting .band { display: none; }
+
+/* ------------------------------------------------------------------ cards */
+
+.class-card, .pkg-card, .note-card { box-shadow: var(--card-lift); }
+.class-card.selected { box-shadow: 0 0 0 1px var(--accent), var(--card-lift); }
+.class-card.dragging, .pkg-card.dragging { box-shadow: var(--float-shadow); }
+.class-card.selected.dragging, .pkg-card.selected.dragging { box-shadow: 0 0 0 1px var(--accent), var(--float-shadow); }
+.pkg-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--card-lift); }
+/* While a card is pointed at, the cards it relates to come forward a little. */
+.class-card.related:not(.selected) { border-color: color-mix(in srgb, var(--rel-strong) 45%, var(--tile-border)); }
+.class-card { transition: border-color var(--t-fast, 120ms), box-shadow var(--t-mid, 160ms); }
+.class-card .stereo { letter-spacing: 0.01em; }
+.class-card.interface .class-name { font-style: normal; }
+/* Room for the slant of an italic name, so its last letter is not cut off. */
+.class-card.abstract .class-name, .member.abstract .member-text { padding-right: 0.2em; }
+
+/* ------------------------------------------------------------------ relations (UML) */
+
+.rel path { fill: none; }
+.rel .line { stroke: var(--rel-ink); stroke-width: 1.25; stroke-linejoin: round; }
+/* implements: dashed like a dependency, but heavier dashes, and the same hollow triangle as extends */
+.rel .line.impl { stroke-dasharray: 6 4; }
+/* uses: a lighter, finer dash with an open arrowhead */
+.rel .line.uses { stroke: var(--rel-soft); stroke-width: 1.1; stroke-dasharray: 3 3.5; }
+.rel .head { stroke: var(--rel-ink); stroke-width: 1.25; stroke-linejoin: round; stroke-linecap: round; }
+/* The hollow triangle is filled with the canvas, so no line shows through it. */
+.rel .head.tri { fill: var(--surface); }
+.rel .head.open { fill: none; stroke: var(--rel-soft); stroke-width: 1.2; }
+
+.edges .rel { transition: opacity var(--t-mid, 160ms) var(--ease-out, ease-out); }
+.edges .rel.dim { opacity: 0.2; }
+.edges .rel.hl .line, .edges .rel.hl .head, .edges .rel .trace, .edges .rel .head.lit { stroke: var(--rel-strong); }
+.edges .rel.hl .line, .edges .rel .trace { stroke-width: 1.5; }
+.edges .rel.hl .line.uses { stroke-width: 1.3; }
+
+/* ------------------------------------------------------------------ tools and legend */
+
+.diagram-tools {
+  height: 34px; padding: 0 3px; gap: 1px; border: 1px solid var(--key-edge, var(--border));
+  background: var(--key-bg, var(--surface)); box-shadow: var(--key-shadow, var(--card-shadow));
+}
+.diagram-tools .icon-btn { width: 28px; height: 28px; }
+.diagram-tools .zoom-label {
+  height: 28px; min-width: 48px; padding: 0 6px; border: 0; border-radius: var(--r-pill); background: none;
+  font: inherit; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: color var(--t-fast, 120ms), background-color var(--t-fast, 120ms), box-shadow var(--t-mid, 160ms);
+}
+.diagram-tools .zoom-label:hover { color: var(--text); }
+.diagram-tools .zoom-label:active { background: var(--well, var(--raised)); box-shadow: var(--press-shadow, none); }
+.diagram-tools .tools-rule { width: 1px; height: 14px; margin: 0 3px; background: var(--border); }
+
+/* Flat canvas ground, so the hollow triangles are filled exactly as in the diagram. */
+.diagram-legend {
+  gap: 14px; border: 1px solid var(--key-edge, var(--border)); background: var(--surface);
+  box-shadow: var(--key-shadow, var(--card-shadow)); color: var(--text-2);
+}
+.diagram-legend .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.diagram-legend svg.glyph { width: 32px; height: 16px; margin: 0; vertical-align: middle; overflow: visible; }
+
+@media (prefers-reduced-motion: reduce) {
+  .edges .rel, .class-card, .diagram-tools .zoom-label { transition: none; }
+}

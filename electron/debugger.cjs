@@ -30,7 +30,9 @@ class Debugger extends EventEmitter {
    */
   attach({ jdk, helperDir, port, classDir }) {
     this.kill();
-    const args = ['-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8', '-cp', helperDir, 'BlackJDebug', String(port)];
+    // Looked up here: bench.cjs requires this module. A folder outside the ANSI code page goes in its short form.
+    const { launcherPath } = require('./bench.cjs');
+    const args = ['-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-Dstderr.encoding=UTF-8', '-cp', launcherPath(helperDir), 'BlackJDebug', String(port)];
     const proc = spawn(jdk.java, args, { windowsHide: true });
     this.proc = proc;
     this.buffer = '';
@@ -114,9 +116,13 @@ class Debugger extends EventEmitter {
     return this.request('stepOut');
   }
 
-  /** Stops the student's thread that is running. Resolves with { paused } ('paused' event follows). */
-  pause() {
-    return this.request('pause');
+  /**
+   * Stops the student's thread that is running. Resolves with { paused } ('paused' event follows).
+   * With arm, a pause that finds none of the student's code running (a window program waiting for
+   * a click or its timer) stops where it runs next: { paused: false, armed: true }; resume() disarms.
+   */
+  pause({ arm = false } = {}) {
+    return this.request('pause', arm ? { arm: true } : {});
   }
 
   /** Re-reads a frame of the paused thread (index into the paused event's frames): { frame, variables, statics }. */

@@ -72,6 +72,29 @@ const tool = (name, description, properties, required = []) => ({
   input_schema: { type: 'object', additionalProperties: false, properties, required },
 });
 const strings = (maxItems, maxLength) => ({ type: 'array', maxItems, items: { type: 'string', maxLength } });
+const int = (minimum, maximum) => ({ type: 'integer', minimum, maximum });
+const SIZE = { type: 'object', additionalProperties: false, properties: { width: int(160, 2400), height: int(120, 1600) }, required: ['width', 'height'] };
+
+/** One input of use_program. Which fields a step needs depends on `do` (checked in validateToolInput). */
+const PLAY_STEP = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    do: { type: 'string', enum: ['key', 'type', 'click', 'move', 'wait', 'resize', 'shot'] },
+    key: { type: 'string', minLength: 1, maxLength: 24 },
+    hold_ms: int(0, 3000),
+    text: { type: 'string', minLength: 1, maxLength: 200 },
+    x: int(0, 4000),
+    y: int(0, 4000),
+    button: int(1, 3),
+    ms: int(0, 5000),
+    width: int(160, 2400),
+    height: int(120, 1600),
+  },
+  required: ['do'],
+};
+const PLAY_NEEDS = { key: ['key'], type: ['text'], click: ['x', 'y'], move: ['x', 'y'], wait: ['ms'], resize: ['width', 'height'], shot: [] };
+const MAX_SHOTS = 3;
+const MAX_PLAY_MS = 20000;
 
 const TOOLS = [
   tool('get_project', 'What BlackJ shows right now: classes with members and relations, compile state and errors, objects on the object bench, the open file, selection and cursor, recent console output, the last exception, test results, the current exercise, a running tutorial, and which panels are open. Use it when the context sent with the message is not enough.', {}),
@@ -128,6 +151,41 @@ const TOOLS = [
   tool('point_at', 'Draw a ring around one UI element with a short note, without steps. Same targets as show_tutorial.', {
     target: { type: 'string', maxLength: 120 }, text: { type: 'string', minLength: 1, maxLength: 160 },
   }, ['target', 'text']),
+  tool('update_plan',
+    'Keep a short live checklist for the current task. The student sees it pinned at the top of your answer, ticking off as you go. ' +
+    'Send the whole list every time, in order; status is pending, in_progress (one item at a time) or done. ' +
+    'Make one at the start of any task with three or more steps, mark an item done as soon as it is finished (not in batches), ' +
+    'and add items when you discover more work. Do not end your turn with open items unless you say why.',
+    {
+      items: {
+        type: 'array', minItems: 1, maxItems: 12,
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: { text: { type: 'string', minLength: 1, maxLength: 120 }, status: { type: 'string', enum: ['pending', 'in_progress', 'done'] } },
+          required: ['text', 'status'],
+        },
+      },
+    }, ['items']),
+  tool('look_at_program',
+    "See a window program (Swing/AWT) you or the student wrote: BlackJ compiles if needed, starts class's main out of sight and returns a screenshot of its window " +
+    '(the student never sees the window; your screenshots appear as thumbnails in the chat). Look closely at layout, cut-off parts, readable text, colours and drawing, ' +
+    'then fix what is wrong and look again. class defaults to the class with main that uses Swing/AWT. wait_ms lets the program run before the shot (default 800). ' +
+    "resize_to also resizes the window's content area and returns a second screenshot: check that layout and drawing grow with the window. " +
+    'The program is closed afterwards (the object bench may be cleared) unless keep_running is true, which hands it to use_program. ' +
+    'For console programs use run_main.',
+    { class: CLASS, wait_ms: int(0, 5000), resize_to: SIZE, keep_running: { type: 'boolean' } }),
+  tool('use_program',
+    'Play-test a window program out of sight: press keys, type, click and wait in its window and get screenshots back, to check controls, score, collisions, game over and dialogs. ' +
+    'Continues the program left running by look_at_program or use_program with keep_running; otherwise (or when class is given) starts class\'s main fresh. ' +
+    "steps run in order: {do:'key', key:'RIGHT'|'SPACE'|'A'|'ENTER'|'ESCAPE'…, hold_ms}, {do:'type', text}, {do:'click', x, y, button}, {do:'move', x, y}, " +
+    "{do:'wait', ms}, {do:'resize', width, height}, {do:'shot'} (a screenshot at that moment, at most " + MAX_SHOTS + '). A screenshot of the end state always comes back. ' +
+    'x and y are pixels of the content area at scale 1; a screenshot says its scale, so divide image coordinates by it. Waits add up to at most 20 s. ' +
+    'Console output and exceptions come back too. Closed afterwards unless keep_running is true.',
+    {
+      class: CLASS,
+      steps: { type: 'array', minItems: 1, maxItems: 40, items: PLAY_STEP },
+      keep_running: { type: 'boolean' },
+    }, ['steps']),
 ];
 
 const BY_NAME = Object.fromEntries(TOOLS.map((t) => [t.name, t]));
@@ -208,13 +266,31 @@ function validateToolInput(name, input) {
     for (const [i, s] of input.steps.entries()) if (!parseTarget(s.target)) return `steps[${i}].target "${s.target}" is not a known target`;
   }
   if (name === 'point_at' && !parseTarget(input.target)) return `target "${input.target}" is not a known target`;
+  if (name === 'use_program') {
+    let shots = 0;
+    let ms = 0;
+    for (const [i, s] of input.steps.entries()) {
+      const missing = PLAY_NEEDS[s.do].find((k) => s[k] == null);
+      if (missing) return `steps[${i}] (${s.do}) needs ${missing}`;
+      const extra = Object.keys(s).find((k) => k !== 'do' && !PLAY_NEEDS[s.do].includes(k) && !(s.do === 'key' && k === 'hold_ms') && !(s.do === 'click' && k === 'button'));
+      if (extra) return `steps[${i}] (${s.do}) does not take ${extra}`;
+      if (s.do === 'shot') shots++;
+      ms += (s.ms || 0) + (s.hold_ms || 0);
+    }
+    if (shots > MAX_SHOTS) return `at most ${MAX_SHOTS} shot steps (the end state comes back anyway)`;
+    if (ms > MAX_PLAY_MS) return `waits add up to ${ms} ms; at most ${MAX_PLAY_MS}`;
+  }
+  if (name === 'update_plan' && input.items.filter((x) => x.status === 'in_progress').length > 1) return 'only one item can be in_progress';
   return null;
 }
 
 // ------------------------------------------------------------------ rules per mode
 
 const WRITE = new Set(['create_class', 'write_file', 'edit_file', 'delete_class']);
-const LOOK = new Set(['get_project', 'read_file', 'search_code', 'inspect_object']);
+// What may still run while a tutorial is on screen: reading, and the tutor's own checklist.
+const LOOK = new Set(['get_project', 'read_file', 'search_code', 'inspect_object', 'update_plan']);
+// Tools that run the student's program out of sight and send screenshots back.
+const SEE = new Set(['look_at_program', 'use_program']);
 
 /** Hard rules that hold whatever the model writes. Returns a reason (model-facing) or null. */
 function checkPolicy(name, input, agent = {}, turn = {}) {
@@ -249,4 +325,26 @@ function pathsOf(name, input) {
   return [];
 }
 
-module.exports = { TOOLS, TARGETS, validateToolInput, checkPolicy, truncate, parseTarget, pathsOf, WRITE };
+/**
+ * Screenshots a tool sends back, as image blocks for its tool_result. Only well-formed base64
+ * PNG/JPEG/WebP/GIF of a sensible size; at most four per call.
+ */
+const MEDIA = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+function imageBlocks(images) {
+  if (!Array.isArray(images)) return [];
+  const out = [];
+  for (const img of images.slice(0, 4)) {
+    if (!isPlain(img) || typeof img.data !== 'string') continue;
+    const media = MEDIA.has(img.media_type) ? img.media_type : 'image/png';
+    if (img.data.length < 64 || img.data.length > 6000000 || !BASE64.test(img.data)) continue;
+    out.push({ type: 'image', source: { type: 'base64', media_type: media, data: img.data } });
+  }
+  return out;
+}
+
+/** Text in what a write call puts into a file: does it build a window (Swing/AWT)? */
+const GUI = /\bJFrame\b|\bJPanel\b|javax\.swing|java\.awt|\bJComponent\b/;
+const writesGui = (name, input) => WRITE.has(name) && isPlain(input) && GUI.test(String(input.content || input.new_text || ''));
+
+module.exports = { TOOLS, TARGETS, validateToolInput, checkPolicy, truncate, parseTarget, pathsOf, imageBlocks, writesGui, WRITE, SEE };

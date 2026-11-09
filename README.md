@@ -63,6 +63,9 @@
 
 **Und mehr**
 - Moderner Editor (Monaco, der Editor aus VS Code) mit Snippets (`sout`, `fori`, `get`, `set`, `test`) und Erklärungen beim Überfahren von Schlüsselwörtern
+- Zur Definition springen (`F12`), Verwendungen finden (`Umschalt+F12`), Umbenennen (`F2`), schnelle Korrekturen (`Strg+.`) für typische Fehler, Getter/Setter und Konstruktor erzeugen
+- Klassendiagramm mit UML-korrekten Pfeilen, das sich als Ganzes verschieben und zoomen lässt
+- Stoppen und Anhalten funktionieren auch bei Fensterprogrammen, Endlosschleifen und Programmen, die auf Eingabe warten
 - Autovervollständigung nach dem Punkt, passend zum Typ: eigene Klassen, aber auch `String`, `ArrayList<Tier>`, `Scanner`, `Math`, `System.out` – die wichtigsten Methoden mit kurzer Erklärung auf Deutsch
 - Jeder Compilerfehler und jede Exception wird auf Deutsch erklärt, mit Tipp zur Lösung
 - Live-Inspektor neben dem Code, Objektkarten zeigen ihre Attributwerte
@@ -79,6 +82,8 @@
 - Der Tutor arbeitet wie ein Agent: Er sieht dein Projekt, liest Dateien, kompiliert, führt Tests aus und schlägt Änderungen als Vergleich vor (oder schreibt sie selbst, wenn du das erlaubst)
 - Tutorials direkt in BlackJ: Der Tutor zieht einen Ring um den Knopf, den du drücken musst („Hier klicken“)
 - Modus *Bauen*: Beschreib ein Programm („Snake“, „Minecraft-artig“), und der Tutor plant, schreibt alle Klassen, kompiliert und behebt Fehler ohne Rückfragen. Danach: Starten oder alles rückgängig machen
+- Der Tutor sieht sein Programm: Er öffnet das Fenster unsichtbar, schaut sich ein Bild davon an und testet es mit Tasten und Klicks, bevor er fertig meldet. Eine Checkliste im Chat zeigt, wo er gerade ist
+- „Zurücksetzen“ unter jeder Nachricht holt den Stand von vorher zurück
 - KI-Vorschläge beim Tippen (grauer Text, `Tab` übernimmt)
 - `Strg+I`: „Mit KI schreiben“ – Änderung erscheint als Vergleich, du entscheidest
 - „Mit KI beheben“ bei Compilerfehlern
@@ -94,7 +99,9 @@
 | Taste | Aktion |
 | --- | --- |
 | `Strg+K` | Kompilieren |
-| `F5` | `main` starten |
+| `F5` / `Umschalt+F5` | `main` starten / stoppen |
+| `F12` / `F2` | Zur Definition / Umbenennen |
+| `Strg+.` | Schnelle Korrektur |
 | `Strg+P` | Suchen / Befehle |
 | `Strg+N` | Neue Klasse |
 | `Strg+I` | Mit KI schreiben |

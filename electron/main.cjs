@@ -6,6 +6,8 @@ const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const { findJdks, asJdk } = require('./jdk.cjs');
 const { installJdk } = require('./jdk-install.cjs');
+// The built window; a parallel smoke run can point at its own build (BLACKJ_DIST=dist-editor). Packaged: always dist.
+const DIST = !require('electron').app.isPackaged && /^dist(-[a-z0-9]+)?$/.test(process.env.BLACKJ_DIST || '') ? process.env.BLACKJ_DIST : 'dist';
 const { compile } = require('./compiler.cjs');
 const { Bench } = require('./bench.cjs');
 const project = require('./project.cjs');
@@ -88,36 +90,81 @@ function send(channel, payload) {
 
 // ------------------------------------------------------------------ bench output, batched
 
+// A program that prints without end must not flood the window: per batch at most OUT_LIMIT
+// characters reach it (the newest), and the console says how much it skipped.
+const OUT_LIMIT = 400000;
 const outBuffer = [];
+let outChars = 0;
+let outSkipped = 0;
 let outTimer = null;
 function queueOut(stream, text) {
   const last = outBuffer[outBuffer.length - 1];
   if (last && last.stream === stream) last.text += text;
   else outBuffer.push({ stream, text });
+  outChars += text.length;
+  while (outChars > OUT_LIMIT && outBuffer.length) {
+    const first = outBuffer[0];
+    const cut = Math.min(first.text.length, outChars - OUT_LIMIT);
+    first.text = first.text.slice(cut);
+    outChars -= cut;
+    outSkipped += cut;
+    if (!first.text) outBuffer.shift();
+  }
   if (!outTimer) outTimer = setTimeout(flushOut, 30);
 }
 
-function flushOut() {
+function takeOut() {
   clearTimeout(outTimer);
   outTimer = null;
-  if (outBuffer.length) send('bench:out', outBuffer.splice(0));
+  const out = outBuffer.splice(0);
+  if (outSkipped) out.unshift({ stream: 'skip', text: '', n: outSkipped });
+  outChars = 0;
+  outSkipped = 0;
+  return out;
 }
 
-// Output always reaches the window before the state change it belongs to (a prompt before "waiting").
+function flushOut() {
+  const out = takeOut();
+  if (out.length) send('bench:out', out);
+}
+
+/** A state change with the output before it in one message: the window shows both at once, in order. */
+function sendState(payload) {
+  const out = takeOut();
+  send('bench:state', out.length ? { ...payload, out } : payload);
+}
+
 bench.on('out', (m) => queueOut(m.stream, m.text));
 bench.on('running', (m) => {
-  flushOut();
-  send('bench:state', { state: m.running ? 'running' : 'idle' });
+  if (m.running) sendState({ state: 'running', cmd: m.cmd || 'main' });
+  else sendState({ state: 'idle', windows: m.windows || [], threads: m.threads || 0, pending: !!m.pending, cmd: m.cmd || 'main' });
 });
-bench.on('window', (m) => send('bench:window', { title: String(m.title || '') }));
-bench.on('waitingForInput', () => {
+// Open windows and live threads of the program changed (a window closed, a thread ended).
+bench.on('program', (m) => {
   flushOut();
-  send('bench:state', { state: 'waiting' });
+  send('bench:program', { windows: m.windows || [], threads: m.threads || 0, busy: !!m.busy });
 });
-bench.on('exit', ({ code }) => {
-  send('bench:state', { state: 'exit', code });
-  // The program ended the JVM (System.exit or a crash): start a fresh one so the bench keeps working.
-  if (state.compiled) startBench().catch(() => {});
+bench.on('window', (m) => send('bench:window', { id: m.id, title: String(m.title || '') }));
+bench.on('waitingForInput', () => sendState({ state: 'waiting' }));
+bench.on('retry', (m) => send('bench:state', { state: 'starting', attempt: m.attempt }));
+
+// After the JVM ended by itself: System.exit always restarts; crashes only a few times in a row.
+let crashes = [];
+bench.on('exit', ({ code, systemExit, reason }) => {
+  if (debug) debug.kill();
+  debug = null;
+  sendState({ state: 'exit', code, systemExit, reason });
+  if (!state.compiled) return;
+  if (!systemExit) {
+    const now = Date.now();
+    crashes = crashes.filter((t) => now - t < 30000);
+    crashes.push(now);
+    if (crashes.length > 3) {
+      send('bench:state', { state: 'failed', reason: { code: 'crashLoop', detail: reason && reason.detail } });
+      return;
+    }
+  }
+  startBench().catch(() => {});
 });
 
 /** Where a JDK that BlackJ downloads lives (next to its settings, so a portable copy keeps it). */
@@ -177,21 +224,47 @@ function hasBreakpoints() {
   return Object.values(breakpoints).some((l) => l.length);
 }
 
-async function startBench() {
-  if (!state.jdk || !state.outDir) return null;
+// The tutor's own test runs (and every smoke run) keep the program's windows out of sight.
+let programOffscreen = !!smokeDir;
+// The start in progress: whoever asks while one runs waits for the newest one.
+let benchStart = null;
+
+/**
+ * Starts a fresh bench JVM for the compiled project. Resolves with the ready message, or null when
+ * a stop() ended it first. A start that a newer one replaced follows that one, so compiling while
+ * the bench restarts (or two quick resets) never shows an error. Rejects with err.reason
+ * ({ code, detail }) only when the JVM really cannot start, after the retries in Bench.start.
+ */
+function startBench() {
+  if (!state.jdk || !state.outDir) return Promise.resolve(null);
   if (debug) debug.kill();
   debug = null;
-  const ready = await bench.start({
-    jdk: state.jdk,
-    benchDir,
-    classDir: state.outDir,
-    cwd: state.dir,
-    classpath: projectClasspath(),
-    jvmArgs: ['-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:0'],
-  });
-  send('bench:state', { state: 'ready', java: ready.java });
-  if (hasBreakpoints()) attachDebugger();
-  return ready;
+  send('bench:state', { state: 'starting' });
+  const p = bench.start({ jdk: state.jdk, benchDir, classDir: state.outDir, cwd: state.dir, classpath: projectClasspath(), debug: true }).then(
+    (ready) => {
+      if (benchStart === p) benchStart = null;
+      if (programOffscreen) bench.request('offscreen', { on: true }).catch(() => {});
+      sendState({ state: 'ready', java: ready.java, debug: !!bench.jdwpPort });
+      if (hasBreakpoints()) attachDebugger();
+      return ready;
+    },
+    (err) => {
+      if (benchStart === p) benchStart = null;
+      if (err && err.superseded) return benchStart || null;
+      send('bench:state', { state: 'failed', reason: err.reason || { code: 'unknown', detail: String(err.message) } });
+      throw err;
+    },
+  );
+  benchStart = p;
+  return p;
+}
+
+/** Ends the program: its JVM, its windows and the debugger. The window hears 'stopped'. */
+function stopBench() {
+  if (debug) debug.kill();
+  debug = null;
+  bench.stop();
+  sendState({ state: 'stopped' });
 }
 
 function buildDir(dir) {
@@ -255,6 +328,9 @@ function importArchive(file) {
 function openProject(dir) {
   const data = project.open(dir);
   watchProject(data.dir);
+  // The last project's program ends with it: its JVM, its windows, the debugger.
+  if (debug) debug.kill();
+  debug = null;
   bench.stop();
   state.dir = data.dir;
   state.outDir = buildDir(data.dir);
@@ -290,6 +366,9 @@ function toolTimeout(call) {
   if (name === 'run_tests') return 150000;
   if (name === 'run_main') return ((call.input && call.input.timeout_s) || 10) * 1000 + 15000;
   if (name === 'create_object' || name === 'call_method') return 40000;
+  // Compile (if needed), start out of sight, wait, screenshots, close; play-testing adds its waits.
+  if (name === 'look_at_program') return 90000;
+  if (name === 'use_program') return 110000;
   if (['write_file', 'edit_file', 'create_class', 'delete_class'].includes(name)) return 0;
   return 15000;
 }
@@ -606,7 +685,7 @@ function registerIpc() {
   ipcMain.handle('project:deleteClass', (_e, { name }) => wrap(async () => {
     await shell.trashItem(project.safeFile(state.dir, name));
     state.compiled = false;
-    bench.stop();
+    stopBench();
   }));
   ipcMain.handle('project:positions', (_e, positions) => wrap(() => project.savePositions(state.dir, positions)));
   ipcMain.handle('project:reveal', () => (state.dir ? shell.openPath(state.dir) : null));
@@ -614,9 +693,9 @@ function registerIpc() {
   ipcMain.handle('compile', async () => {
     if (!state.dir) return fail({ code: 'noProject' });
     if (!state.jdk) return fail({ code: 'noJdk' });
-    if (debug) debug.kill();
-    bench.stop();
+    // The running program ends (its windows close); the new classes get a fresh JVM.
     state.compiled = false;
+    stopBench();
     const files = project.listJavaFiles(state.dir).map((rel) => path.join(state.dir, ...rel.split('/')));
     const r = await compile({ jdk: state.jdk, projectDir: state.dir, outDir: state.outDir, files, classpath: projectClasspath() });
     if (r.ok) {
@@ -624,10 +703,9 @@ function registerIpc() {
       try {
         await startBench();
       } catch (err) {
-        return { ok: true, result: { ...r, benchError: String(err.message) } };
+        // The window already heard why ('failed'); the compile itself worked.
+        return { ok: true, result: { ...r, benchFailed: err.reason || { code: 'unknown', detail: String(err.message) } } };
       }
-    } else {
-      send('bench:state', { state: 'stopped' });
     }
     return { ok: true, result: r };
   });
@@ -665,14 +743,35 @@ function registerIpc() {
     });
   });
 
-  const benchCall = (cmd) => (_e, payload) => wrap(() => bench.request(cmd, payload));
+  // A request while the bench (re)starts waits for it instead of failing with "not running".
+  const benchCall = (cmd) => (_e, payload) => wrap(async () => {
+    if (!bench.alive && benchStart) await benchStart.catch(() => null);
+    return bench.request(cmd, payload);
+  });
   for (const cmd of ['describe', 'new', 'call', 'main', 'inspect', 'store', 'remove', 'list', 'stdin', 'pad', 'padReset', 'inspectClass']) {
     ipcMain.handle('bench:' + cmd, benchCall(cmd));
   }
+  // The program's windows (for the tutor): none while no JVM runs. A window's id travels as
+  // "window" in the bench protocol, where "id" numbers the requests.
+  ipcMain.handle('bench:windows', () => wrap(() => (bench.alive ? bench.request('windows') : { windows: [] })));
+  ipcMain.handle('bench:capture', (_e, { id, maxWidth } = {}) => wrap(() => bench.request('capture', { window: id ?? null, maxWidth: maxWidth || 1024 })));
+  ipcMain.handle('bench:input', (_e, { id, events } = {}) => wrap(() => bench.request('input', { window: id ?? null, events: Array.isArray(events) ? events : [] })));
+  ipcMain.handle('bench:closeWindows', () => wrap(() => (bench.alive ? bench.request('closeWindows') : { closed: 0 })));
+  ipcMain.handle('bench:offscreen', (_e, { on } = {}) => wrap(async () => {
+    programOffscreen = !!on || !!smokeDir;
+    if (bench.alive) await bench.request('offscreen', { on: programOffscreen });
+    return { on: programOffscreen };
+  }));
+  // Stop: the JVM ends (windows, threads, a paused debugger, a program waiting for input) and a
+  // fresh one starts for the bench.
   ipcMain.handle('bench:reset', () => wrap(async () => {
-    if (debug) debug.kill();
-    bench.stop();
+    stopBench();
     if (state.compiled) await startBench();
+  }));
+  // The project closes: the program ends and nothing starts again.
+  ipcMain.handle('bench:stop', () => wrap(() => {
+    state.compiled = false;
+    stopBench();
   }));
 
   ipcMain.handle('debug:setBreakpoints', (_e, { breakpoints: map }) => wrap(async () => {
@@ -684,9 +783,12 @@ function registerIpc() {
   for (const cmd of ['resume', 'stepOver', 'stepInto', 'stepOut']) {
     ipcMain.handle('debug:' + cmd, () => wrap(() => (debug ? debug[cmd]() : null)));
   }
+  // Pause: stops the student's code where it runs; a window program that waits for a click or
+  // its timer stops where its code runs next ({ armed: true } until then).
   ipcMain.handle('debug:pause', () => wrap(async () => {
     const d = await attachDebugger();
-    return d ? d.pause() : null;
+    if (!d) throw Object.assign(new Error('debugger unavailable'), { code: bench.alive && !bench.jdwpPort ? 'noDebugAgent' : 'noDebugger' });
+    return d.pause({ arm: true });
   }));
   ipcMain.handle('debug:variables', (_e, { frame }) => wrap(() => debug.variables(frame)));
   ipcMain.handle('debug:expand', (_e, { objectId }) => wrap(() => debug.expand(objectId)));
@@ -704,9 +806,10 @@ function registerIpc() {
     tutor.continue(req).catch((err) => send('ai:event', { turnId: req.turnId, type: 'error', code: err.code || 'unknown', message: String(err.message) }));
     return true;
   });
-  ipcMain.handle('ai:toolResult', (_e, { callId, content, isError }) => {
+  ipcMain.handle('ai:toolResult', (_e, { callId, content, isError, images }) => {
     const p = pendingTools.get(callId);
-    if (p) p.resolve({ content: String(content ?? ''), isError: !!isError });
+    // Screenshots of the student's program (look_at_program, use_program); ai.cjs checks them.
+    if (p) p.resolve({ content: String(content ?? ''), isError: !!isError, images: Array.isArray(images) ? images.slice(0, 4) : undefined });
     return true;
   });
   ipcMain.handle('ai:stop', () => tutor.stop());
@@ -844,7 +947,7 @@ function windowOptions() {
   };
 }
 
-const ENTRY = process.env.BLACKJ_DEV ? 'http://localhost:5291/' : pathToFileURL(path.join(__dirname, '..', 'dist', 'index.html')).href;
+const ENTRY = process.env.BLACKJ_DEV ? 'http://localhost:5291/' : pathToFileURL(path.join(__dirname, '..', DIST, 'index.html')).href;
 
 /** True for the app's own page (any query); a link to anything else must never replace it. */
 function isEntry(url) {
@@ -864,13 +967,14 @@ function guard(w) {
     if (!isEntry(url)) e.preventDefault();
   });
   w.webContents.on('before-input-event', (e, input) => {
-    if (input.type === 'keyDown' && input.key === 'F12' && !app.isPackaged) w.webContents.toggleDevTools();
+    // Ctrl+Shift+I, not F12: F12 is "go to definition" in the editor.
+    if (input.type === 'keyDown' && input.control && input.shift && input.key.toLowerCase() === 'i' && !app.isPackaged) w.webContents.toggleDevTools();
   });
 }
 
 function loadInto(w, query) {
   if (process.env.BLACKJ_DEV) w.loadURL('http://localhost:5291/' + (query ? '?' + new URLSearchParams(query) : ''));
-  else w.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), query ? { query } : undefined);
+  else w.loadFile(path.join(__dirname, '..', DIST, 'index.html'), query ? { query } : undefined);
 }
 
 // ------------------------------------------------------------------ pop-out windows
@@ -985,6 +1089,11 @@ function createWindow() {
     settleTools('BlackJ was reloaded.');
     if (tutor) tutor.reset();
     closePanels();
+    // A reload in the middle of a tutor's look: the student's own windows show again.
+    if (programOffscreen !== !!smokeDir) {
+      programOffscreen = !!smokeDir;
+      if (bench.alive) bench.request('offscreen', { on: programOffscreen }).catch(() => {});
+    }
   });
   win.webContents.once('did-finish-load', () => {
     const dirs = pathArgs(process.argv);

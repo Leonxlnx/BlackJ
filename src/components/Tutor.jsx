@@ -6,9 +6,17 @@ import { useT, formatNumber, formatCost } from '../i18n.js';
 import A from '../panels.js';
 import { api } from '../api.js';
 import monaco from '../lib/monaco.js';
-import { waitingForStudent } from '../agent.js';
+import { waitingForStudent, toolLabel } from '../agent.js';
 import Icon from './Icon.jsx';
-import { ToolRows, DiffCard, ContextChips, BuildCard, groupParts } from './AgentParts.jsx';
+import ModelPicker from './ModelPicker.jsx';
+import ToggleRow from './ToggleRow.jsx';
+import { ToolRows, DiffCard, ContextChips, BuildCard, PlanCard, ShotLightbox, Checkpoint, groupParts } from './AgentParts.jsx';
+
+/** 42 s, 1:05 min: how long a turn has been working (or worked). */
+function duration(ms) {
+  const secs = Math.max(0, Math.round(ms / 1000));
+  return secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} min`;
+}
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -44,8 +52,35 @@ function Markdown({ text, final, t }) {
         });
       }
     }
+    // `Hund`, `Hund.java`, `tiere/Hund.java` in a finished answer: a chip that opens the file.
+    if (final) {
+      const byName = new Map();
+      for (const f of Object.values(getState().files)) {
+        const simple = String(f.className || '').split('.').pop();
+        for (const k of [f.className, simple, f.name, f.name.split('/').pop()]) if (k && !byName.has(k)) byName.set(k, f.name);
+      }
+      for (const code of el.querySelectorAll('code')) {
+        if (code.closest('pre')) continue;
+        const file = byName.get(code.textContent.trim());
+        if (!file) continue;
+        code.classList.add('md-file');
+        code.dataset.file = file;
+        code.tabIndex = 0;
+        code.setAttribute('role', 'link');
+        code.title = file;
+      }
+    }
   }, [html, final]);
+  const openCode = (code) => {
+    const file = code.dataset.file;
+    if (getState().files[file]) A.openFile(file);
+  };
   const onClick = (e) => {
+    const chip = e.target.closest('code.md-file');
+    if (chip) {
+      openCode(chip);
+      return;
+    }
     // A link never replaces the window: web links open in the browser (main allows only a few
     // sites), a link to a project file opens it in the editor, anything else does nothing.
     const a = e.target.closest('a[href]');
@@ -73,7 +108,11 @@ function Markdown({ text, final, t }) {
       setTimeout(() => { b.lastChild.textContent = t('tutor.copy'); }, 1400);
     }
   };
-  return <div className="md" ref={ref} onClick={onClick} dangerouslySetInnerHTML={{ __html: html }} />;
+  const onKeyDown = (e) => {
+    const chip = e.key === 'Enter' && e.target.closest && e.target.closest('code.md-file');
+    if (chip) openCode(chip);
+  };
+  return <div className="md" ref={ref} onClick={onClick} onKeyDown={onKeyDown} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function Setup() {
@@ -98,15 +137,7 @@ function Setup() {
         <span className="field-label">{t('tutor.keyLabel')}</span>
         <input className="input" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={t('tutor.keyPlaceholder')} autoComplete="off" spellCheck="false" />
       </label>
-      {canStore && (
-        <label className="check">
-          <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />
-          <span>
-            {t('tutor.keyRemember')}
-            <span className="field-hint" style={{ display: 'block' }}>{t('tutor.keyRememberHint')}</span>
-          </span>
-        </label>
-      )}
+      {canStore && <ToggleRow checked={keep} onChange={setKeep} label={t('tutor.keyRemember')} hint={t('tutor.keyRememberHint')} />}
       {error && <div className="field-error">{error}</div>}
       <div className="action-row">
         <button className="btn btn-primary" type="submit" disabled={!key.trim()}>{t('tutor.keySave')}</button>
@@ -118,24 +149,40 @@ function Setup() {
   );
 }
 
-/** While a turn runs: what the tutor does right now, which step, and for how long. */
-function LiveStatus({ turn, t, build }) {
+/** While a turn runs: what the tutor does right now (the running step by name), which step, and for how long. */
+function LiveStatus({ turn, t, build, stopping }) {
   const [, tick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(id);
   }, []);
-  const secs = Math.max(0, Math.round((Date.now() - (turn.startedAt || Date.now())) / 1000));
-  const time = secs < 60 ? `${secs} s` : `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')} min`;
-  const what = turn.phase === 'thinking' || !turn.phase ? t(build && !(turn.parts || []).length ? 'build.starting' : 'agent.live.thinking') : turn.phase === 'tool' ? t('agent.live.tool') : t('agent.live.writing');
+  const time = duration(Date.now() - (turn.startedAt || Date.now()));
+  const tool = [...(turn.parts || [])].reverse().find((p) => p.type === 'tool' && p.status === 'running' && p.name !== 'update_plan');
+  // The running step's row above already names what it does: then only which step and how long.
+  const named = !stopping && turn.phase === 'tool' && !!tool;
+  const what = stopping ? t('agent.live.stopping')
+    : turn.phase === 'thinking' || !turn.phase ? t(build && !(turn.parts || []).length ? 'build.starting' : 'agent.live.thinking')
+      : turn.phase === 'tool' ? (tool ? toolLabel(tool, t) : t('agent.live.tool')) : t('agent.live.writing');
+  const step = t('agent.live.step', { n: turn.step || 1 });
+  const parts = named ? [step.charAt(0).toUpperCase() + step.slice(1)] : [what, ...(turn.step > 1 ? [step] : [])];
+  if (Date.now() - (turn.startedAt || Date.now()) >= 1000) parts.push(time);
   return (
-    <div className="msg-meta live-status" role="status">
+    <div className="msg-meta live-status" role="status" data-stopping={stopping || null}>
       <span className="live-dot" aria-hidden="true" />
-      {what}
-      {turn.step > 1 && <span> · {t('agent.live.step', { n: turn.step })}</span>}
-      <span> · {time}</span>
+      <span className="live-what">{parts.join(' · ')}</span>
     </div>
   );
+}
+
+/** "Kurzer Hänger – geht in 4 s weiter.": the countdown of an automatic resume after a hiccup. */
+function RetryIn({ at, t }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 500);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.max(0, Math.ceil((at - Date.now()) / 1000));
+  return <span className="ag-retry">{t('agent.retrying', { s: secs })}</span>;
 }
 
 function Meta({ turn, t, lang, showCosts, last, waiting, build }) {
@@ -149,9 +196,19 @@ function Meta({ turn, t, lang, showCosts, last, waiting, build }) {
       </div>,
     );
   }
-  if (turn.status === 'aborted') lines.push(<div key="a" className="msg-meta">{t('tutor.aborted')}</div>);
+  // A stopped turn that worked with tools says so in its footer ("Gestoppt nach …").
+  const worked = (turn.parts || []).some((p) => p.type === 'tool' && p.name !== 'update_plan');
+  if (turn.status === 'aborted' && !(worked && turn.endedAt)) lines.push(<div key="a" className="msg-meta">{t('tutor.aborted')}</div>);
   if (turn.status === 'refusal') lines.push(<div key="r" className="msg-meta">{t('tutor.refusal')}</div>);
-  if (turn.status === 'error') {
+  if (turn.status === 'error' && turn.retryAt && last) {
+    // It goes on by itself in a moment: a quiet line, not an error.
+    lines.push(
+      <div key="e" className="msg-meta">
+        <RetryIn at={turn.retryAt} t={t} />{' '}
+        <button className="link" onClick={turn.partial ? A.continueLast : A.retryLast}>{t('agent.retryNow')}</button>
+      </div>,
+    );
+  } else if (turn.status === 'error') {
     const full = turn.error.code === 'chatFull';
     lines.push(
       <div key="e" className="msg-meta msg-error">
@@ -194,20 +251,38 @@ function Meta({ turn, t, lang, showCosts, last, waiting, build }) {
       </div>,
     );
   }
-  if (turn.status === 'done' && showCosts && turn.usage) {
-    // Only the price, and only while the answer is hovered or focused; the tokens are in the tooltip.
-    const p = { input: formatNumber(lang, turn.usage.input), output: formatNumber(lang, turn.usage.output), cost: formatCost(lang, turn.cost || 0), steps: turn.steps };
-    lines.push(<div key="u" className="msg-meta msg-cost" title={turn.steps > 1 ? t('tutor.usageSteps', p) : t('tutor.usage', p)}>≈ {p.cost}</div>);
+  // How long it took and how many steps, quietly, for turns that worked with tools.
+  const tools = (turn.parts || []).filter((p) => p.type === 'tool' && p.name !== 'update_plan').length;
+  const ended = turn.endedAt && turn.startedAt && (turn.status === 'done' || turn.status === 'aborted');
+  const usage = turn.status === 'done' && showCosts && turn.usage
+    ? { input: formatNumber(lang, turn.usage.input), output: formatNumber(lang, turn.usage.output), cost: formatCost(lang, turn.cost || 0), steps: turn.steps }
+    : null;
+  if ((ended && tools) || usage) {
+    lines.push(
+      <div key="f" className="msg-meta ag-foot">
+        {ended && tools > 0 && (
+          <>
+            {/* Under a second, the time says nothing: just "Fertig" or "Gestoppt". */}
+            <span>{turn.endedAt - turn.startedAt < 1000 ? t(turn.status === 'aborted' ? 'agent.foot.stoppedQuick' : 'agent.foot.doneQuick') : t(turn.status === 'aborted' ? 'agent.foot.stopped' : 'agent.foot.done', { time: duration(turn.endedAt - turn.startedAt) })}</span>
+            <span> · {tools === 1 ? t('agent.foot.steps1') : t('agent.foot.steps', { n: tools })}</span>
+          </>
+        )}
+        {/* Only the price, and only while the answer is hovered or focused; the tokens are in the tooltip. */}
+        {usage && <span className="msg-cost" title={turn.steps > 1 ? t('tutor.usageSteps', usage) : t('tutor.usage', usage)}>{ended && tools ? ' · ' : ''}≈ {usage.cost}</span>}
+      </div>,
+    );
   }
   return lines;
 }
 
-function Turn({ turn, t, lang, showCosts, last, proposals, build }) {
+function Turn({ turn, next, t, lang, showCosts, last, proposals, build, busy, stopping, onShot }) {
   if (turn.role === 'user') {
+    const cp = next && next.role === 'assistant' && next.checkpoint;
     return (
       <div className="msg-user">
         <div className="bubble">{turn.text}</div>
         {turn.ctx && <div className="msg-ctx">{t('tutor.context', { file: turn.ctx })}</div>}
+        {cp && <Checkpoint turnId={next.id} restoredAt={next.restoredAt} busy={busy} />}
       </div>
     );
   }
@@ -217,16 +292,17 @@ function Turn({ turn, t, lang, showCosts, last, proposals, build }) {
   const lastPart = parts[parts.length - 1];
   const waiting = running && Object.values(proposals).some((p) => p.turnId === turn.id && p.status === 'pending');
   return (
-    <div className="msg-ai">
+    <div className="msg-ai" data-running={running || null}>
+      {turn.plan && turn.plan.length > 0 && <PlanCard plan={turn.plan} live={running} />}
       {groups.map((g) => {
         if (g.type === 'text') return g.text ? <Markdown key={g.key} text={g.text} final={!running} t={t} /> : null;
-        if (g.type === 'tools') return <ToolRows key={g.key} parts={g.parts} turnId={turn.id} tail={build && running} />;
+        if (g.type === 'tools') return <ToolRows key={g.key} parts={g.parts} turnId={turn.id} running={running} onShot={onShot} />;
         if (g.type === 'diff') return <DiffCard key={g.key} id={g.proposalId} />;
         return null;
       })}
       {turn.status === 'working' && lastPart && lastPart.type === 'text' && <span className="cursor-blink" aria-hidden="true" />}
-      {running && !waiting && <LiveStatus turn={turn} t={t} build={build} />}
-      {build && !running && <BuildCard turnId={turn.id} />}
+      {running && !waiting && <LiveStatus turn={turn} t={t} build={build} stopping={stopping && last} />}
+      {build && !running && <BuildCard turnId={turn.id} onShot={onShot} />}
       <Meta turn={turn} t={t} lang={lang} showCosts={showCosts} last={last} waiting={waiting} build={build} />
     </div>
   );
@@ -273,16 +349,50 @@ export default function Tutor() {
   const proposals = useStore((s) => s.agent.proposals);
   const draft = useStore((s) => s.tutorDraft);
   const [text, setText] = useState('');
+  const [shot, setShot] = useState(null);
+  const [stopping, setStopping] = useState(false);
   const listRef = useRef(null);
   const inputRef = useRef(null);
-  const model = models.find((m) => m.id === settings.model);
   const pendingOnly = chat.busy && waitingForStudent();
   const build = chat.mode === 'build';
+  const openShot = (id, list) => setShot({ id, list, at: Date.now() });
 
+  // Stop shows at once; the turn ends a moment later, when the main process has stopped it.
+  useEffect(() => {
+    if (!chat.busy) setStopping(false);
+  }, [chat.busy]);
+  const stop = () => {
+    setStopping(true);
+    A.stopTutor();
+  };
+
+  // The chat follows the newest output while it is scrolled to the end; scrolled up to read, it
+  // stays put. A new message always brings it back to the end.
+  const stickRef = useRef(true);
+  const turnCount = chat.turns.length;
   useEffect(() => {
     const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
   }, [chat.turns]);
+  useEffect(() => {
+    stickRef.current = true;
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turnCount]);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return undefined;
+    // Screenshots load after they are drawn and make the chat taller.
+    const onLoad = () => {
+      if (stickRef.current) el.scrollTop = el.scrollHeight;
+    };
+    el.addEventListener('load', onLoad, true);
+    return () => el.removeEventListener('load', onLoad, true);
+  }, [hasKey]);
+  const onChatScroll = (e) => {
+    const el = e.currentTarget;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
 
   // A question asked while the tutor was busy waits here until the student sends it.
   useEffect(() => {
@@ -311,12 +421,13 @@ export default function Tutor() {
       {hasKey && (
       <div className="tutor-sub">
         <div className="seg" role="group" aria-label={t('a11y.mode')} data-tour="tutor-mode">
-          {['hints', 'explain', 'build'].map((m) => (
-            <button key={m} aria-pressed={chat.mode === m} onClick={() => chat.mode !== m && A.setTutorMode(m)}>{t('tutor.mode.' + m)}</button>
+          {[['hints', 'bulb'], ['explain', 'explain'], ['build', 'blocks']].map(([m, icon]) => (
+            <button key={m} aria-pressed={chat.mode === m} onClick={() => chat.mode !== m && A.setTutorMode(m)}><Icon name={icon} />{t('tutor.mode.' + m)}</button>
           ))}
         </div>
-        <button className="btn btn-sm btn-quiet" onClick={A.newChat} disabled={!chat.turns.length} data-tour="new-chat">
-          {t('tutor.newChat')}
+        <button className="btn btn-sm btn-quiet tutor-new" onClick={A.newChat} disabled={!chat.turns.length} data-tour="new-chat" title={t('tutor.newChat')} aria-label={t('tutor.newChat')}>
+          <Icon name="chat" />
+          <span className="tutor-new-label">{t('tutor.newChat')}</span>
         </button>
       </div>
       )}
@@ -326,7 +437,7 @@ export default function Tutor() {
         </div>
       ) : (
         <>
-          <div className="chat" ref={listRef}>
+          <div className="chat" ref={listRef} onScroll={onChatScroll}>
             {chat.turns.length === 0 && (
               <>
                 {build && <h3 className="build-title">{t('build.title')}</h3>}
@@ -335,9 +446,23 @@ export default function Tutor() {
               </>
             )}
             {chat.turns.map((turn, i) => (
-              <Turn key={turn.id} turn={turn} t={t} lang={settings.lang} showCosts={settings.showCosts} last={i === chat.turns.length - 1} proposals={proposals} build={build} />
+              <Turn
+                key={turn.id}
+                turn={turn}
+                next={chat.turns[i + 1]}
+                t={t}
+                lang={settings.lang}
+                showCosts={settings.showCosts}
+                last={i === chat.turns.length - 1}
+                proposals={proposals}
+                build={build}
+                busy={chat.busy}
+                stopping={stopping}
+                onShot={openShot}
+              />
             ))}
           </div>
+          <ShotLightbox view={shot} onClose={() => setShot(null)} />
           <form
             className="composer"
             onSubmit={(e) => {
@@ -358,13 +483,16 @@ export default function Tutor() {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       send();
+                    } else if (e.key === 'Escape' && chat.busy && !stopping) {
+                      e.preventDefault();
+                      stop();
                     }
                   }}
                   placeholder={t(build ? 'build.placeholder' : 'tutor.placeholder')}
                   aria-label={t(build ? 'build.placeholder' : 'tutor.placeholder')}
                 />
                 {chat.busy && !(pendingOnly && text.trim()) ? (
-                  <button type="button" className="send-btn stop" onClick={A.stopTutor} aria-label={t('tutor.stop')} title={t('tutor.stop')}>
+                  <button type="button" className="send-btn stop" data-stopping={stopping || null} onClick={stop} disabled={stopping} aria-label={t('tutor.stop')} title={t('tutor.stop') + ' (Esc)'}>
                     <Icon name="stop" />
                   </button>
                 ) : (
@@ -375,7 +503,8 @@ export default function Tutor() {
               </div>
             </div>
             <div className="composer-row">
-              <span className="composer-model">{model ? model.label.replace('Claude ', '') : ''}</span>
+              <ModelPicker compact placement="top" value={settings.model} models={models} showPrices={!!settings.showCosts} onChange={(id) => A.updateSettings({ model: id })} />
+              {chat.busy && <span className="composer-hint">{t('agent.stopHint')}</span>}
             </div>
           </form>
         </>

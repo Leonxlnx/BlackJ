@@ -4,6 +4,8 @@ import { useT, formatKeys } from '../i18n.js';
 import * as A from '../actions.js';
 import { POPPABLE } from '../lib/layout.js';
 import Icon from './Icon.jsx';
+import { useRunState, liveParts } from './RunStrip.jsx';
+import { StopGlyph } from './RuntimeGlyphs.jsx';
 
 /** The view menu: panels into windows of their own and back, and the layout as it came. */
 export function viewMenu(t, detached) {
@@ -32,7 +34,10 @@ export default function TitleBar() {
   const errors = useStore((s) => (s.compile.state === 'errors' ? s.compile.problems.filter((p) => p.severity === 'error').length : 0));
   const model = useMemo(() => (project ? A.modelOf(files) : null), [files, project]);
   const mains = model ? model.list.filter((c) => c.hasMain) : [];
-  const running = benchState === 'running' || benchState === 'waiting';
+  // Stop while a program runs, waits for input, is paused, or lives on in its windows after
+  // main() returned (until its last window closes).
+  const run = useRunState();
+  const liveTitle = liveParts(t, run.live).map((p) => p.text).join(' · ');
   const inProject = view === 'project' && project;
   const mainTarget = mains.find((c) => c.fileClass === selected) || mains.find((c) => c.file === activeTab) || mains[0];
   const viewTitle = { learn: t('nav.learn'), settings: t('nav.settings') }[view];
@@ -61,7 +66,21 @@ export default function TitleBar() {
             ))}
           </nav>
         ) : (
-          <span className="tb-title">{viewTitle || 'BlackJ'}</span>
+          <span className="tb-title tb-brand">
+            {!viewTitle && (
+              <span className="tb-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M14.75 5v8.25a3.75 3.75 0 0 1-7.5 0" fill="none" stroke="currentColor" strokeWidth="3.4" /></svg>
+              </span>
+            )}
+            {viewTitle || 'BlackJ'}
+          </span>
+        )}
+        {/* Left of the search, which never moves: the left side gives way, the pill truncates. */}
+        {attention && (
+          <button className="btn btn-sm btn-quiet tb-state" data-tour="state" onClick={attention.go} title={attention.text}>
+            <span className={'state-dot ' + attention.dot} />
+            <span className="tb-state-text">{attention.text}</span>
+          </button>
         )}
       </div>
 
@@ -74,15 +93,9 @@ export default function TitleBar() {
       <div className="tb-right">
         {inProject && (
           <>
-            {attention && (
-              <button className="btn btn-sm btn-quiet tb-state" data-tour="state" onClick={attention.go}>
-                <span className={'state-dot ' + attention.dot} />
-                {attention.text}
-              </button>
-            )}
-            {running || paused ? (
-              <button className="btn btn-sm" data-tour="stop" onClick={A.stopProgram} title={t('ws.stop')}>
-                <Icon name="stop" />
+            {paused || run.canStop ? (
+              <button className="btn btn-sm rt-tb-stop" data-tour="stop" data-state={run.kind} onClick={() => A.stopProgram()} title={liveTitle ? `${t('runtime.stopTitle')} · ${liveTitle}` : t('runtime.stopTitle')}>
+                <StopGlyph running={run.kind !== 'paused' && run.kind !== 'armed'} />
                 <span className="tb-label">{t('ws.stop')}</span>
               </button>
             ) : (

@@ -55,9 +55,17 @@ contextBridge.exposeInMainWorld('blackj', {
     padReset: invoke('bench:padReset'),
     inspectClass: invoke('bench:inspectClass'),
     reset: invoke('bench:reset'),
+    stop: invoke('bench:stop'),
+    // The program's own windows: list, render to PNG, send keys and clicks, close, keep out of sight.
+    windows: invoke('bench:windows'),
+    capture: invoke('bench:capture'),
+    input: invoke('bench:input'),
+    closeWindows: invoke('bench:closeWindows'),
+    offscreen: invoke('bench:offscreen'),
     onOut: listen('bench:out'),
     onState: listen('bench:state'),
     onWindow: listen('bench:window'),
+    onProgram: listen('bench:program'),
   },
   ai: {
     status: invoke('ai:status'),

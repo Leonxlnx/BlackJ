@@ -127,7 +127,6 @@ const de = {
   'console.send': 'Senden',
   'console.clear': 'Leeren',
   'console.empty': 'Noch keine Ausgabe',
-  'console.exit': 'Das Programm hat die Java-VM beendet (Code {code}). Die Objekte wurden zurückgesetzt.',
   'console.reset': 'Neue Java-VM gestartet. Die Objektbank ist leer.',
   'console.stopped': 'Programm gestoppt.',
 
@@ -345,7 +344,6 @@ const de = {
   'settings.keyReplace': 'Neuer Schlüssel',
   'settings.keyForget': 'Schlüssel entfernen',
   'settings.model': 'Modell',
-  'settings.modelPrice': '{input} $ / {output} $ pro 1 Mio. Tokens',
   'settings.mode': 'Startmodus',
   'settings.sendContext': 'Code automatisch mitsenden',
   'settings.sendContextText': 'Schickt die geöffnete Datei und Fehlermeldungen mit, damit der Tutor sie kennt.',
@@ -464,7 +462,7 @@ const de = {
   'debug.out': 'Heraus',
   'debug.bp1': '1 Haltepunkt',
   'debug.bps': '{n} Haltepunkte',
-  'debug.empty': 'Klick links neben eine Zeilennummer (oder F9), um einen Haltepunkt zu setzen. Ruf dann eine Methode auf: Das Programm hält dort an.',
+  'debug.empty': 'Klick neben eine Zeilennummer (F9), dann eine Methode aufrufen.',
   'debug.waiting': 'Ruf eine Methode auf oder starte main. Das Programm hält am nächsten Haltepunkt an.',
   'debug.stack': 'Aufrufe',
   'debug.vars': 'Variablen',
@@ -517,6 +515,7 @@ const de = {
   'shortcuts.project': 'Projekt',
   'shortcuts.editor': 'Editor',
   'shortcuts.debug': 'Debugger',
+  'shortcuts.code': 'Im Code bewegen',
   'shortcuts.palette': 'Klasse, Methode oder Befehl suchen',
   'shortcuts.commands': 'Nur Befehle',
   'shortcuts.help': 'Diese Übersicht',
@@ -853,7 +852,6 @@ const en = {
   'console.send': 'Send',
   'console.clear': 'Clear',
   'console.empty': 'No output yet',
-  'console.exit': 'The program ended the Java VM (code {code}). The objects were reset.',
   'console.reset': 'Started a new Java VM. The object bench is empty.',
   'console.stopped': 'Program stopped.',
 
@@ -1071,7 +1069,6 @@ const en = {
   'settings.keyReplace': 'New key',
   'settings.keyForget': 'Remove key',
   'settings.model': 'Model',
-  'settings.modelPrice': '${input} / ${output} per 1M tokens',
   'settings.mode': 'Starting mode',
   'settings.sendContext': 'Send code automatically',
   'settings.sendContextText': 'Sends the open file and error messages along so the tutor knows them.',
@@ -1190,7 +1187,7 @@ const en = {
   'debug.out': 'Out',
   'debug.bp1': '1 breakpoint',
   'debug.bps': '{n} breakpoints',
-  'debug.empty': 'Click left of a line number (or press F9) to set a breakpoint. Then call a method: the program stops there.',
+  'debug.empty': 'Click beside a line number (F9), then call a method.',
   'debug.waiting': 'Call a method or run main. The program stops at the next breakpoint.',
   'debug.stack': 'Calls',
   'debug.vars': 'Variables',
@@ -1243,6 +1240,7 @@ const en = {
   'shortcuts.project': 'Project',
   'shortcuts.editor': 'Editor',
   'shortcuts.debug': 'Debugger',
+  'shortcuts.code': 'Find your way in the code',
   'shortcuts.palette': 'Search class, method or command',
   'shortcuts.commands': 'Commands only',
   'shortcuts.help': 'This overview',
@@ -1452,6 +1450,12 @@ const en = {
   'err.jdkUnsupported': 'Setting up Java works on 64-bit Windows only.',
   'err.printFailed': 'Printing did not work.',
 };
+
+// Strings of newer features live in src/i18n-parts/<area>.js as export const de = {...}, en = {...}.
+for (const part of Object.values(import.meta.glob('./i18n-parts/*.js', { eager: true }))) {
+  Object.assign(de, part.de || {});
+  Object.assign(en, part.en || {});
+}
 
 const dict = { de, en };
 
